@@ -136,7 +136,7 @@ The app now sends **real OTP SMS messages with Firebase Authentication**.
 Current login flow:
 
 1. The app checks that the selected `customer`, `recycler`, or `admin` account exists in the backend with `POST /api/v1/auth/login`.
-2. The app starts Firebase phone verification from [firebaseConfig.js](/home/harshbamane/Documents/my_greenbyte/GreenByte-App/firebaseConfig.js:1).
+2. The app starts Firebase phone verification from [firebaseClient.js](/home/harshbamane/Documents/my_greenbyte/GreenByte-App/firebaseClient.js:1).
 3. Firebase reCAPTCHA runs through `expo-firebase-recaptcha`.
 4. Firebase sends the OTP SMS to the phone number.
 5. After the user enters the code, Firebase verifies the OTP.

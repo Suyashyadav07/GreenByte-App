@@ -17,7 +17,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { firebase, firebaseAuth, firebaseConfig } from './firebaseConfig';
+import { firebase, firebaseAuth, firebaseConfig } from './firebaseClient';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -218,6 +218,102 @@ function getPickupCreatedAtMs(record) {
 
   const parsed = Date.parse(record?.createdAt || '');
   return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
+function normalizeFrontendPickupStatus(status) {
+  const statusMap = {
+    submitted: 'submitted',
+    estimated: 'submitted',
+    price_accepted: 'submitted',
+    assigned: 'assigned',
+    in_transit: 'onTheWay',
+    collected: 'arriving',
+    recycled: 'completed',
+    paid: 'completed',
+    completed: 'completed',
+    rejected: 'rejected',
+    cancelled: 'rejected'
+  };
+
+  return statusMap[status] || 'submitted';
+}
+
+function formatPickupDate(value) {
+  if (!value) {
+    return '';
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  return date.toLocaleString();
+}
+
+function toTrackingId(sourceId) {
+  const digits = String(sourceId || '').replace(/\D/g, '');
+  const suffix = digits.slice(-6) || '000000';
+  return `GB-${suffix}`;
+}
+
+function mapBackendPickupToFrontend(pickup) {
+  if (!pickup) {
+    return null;
+  }
+
+  const pickupId = String(pickup._id || pickup.id || Date.now());
+
+  return {
+    id: pickupId,
+    trackingId: pickup.trackingId || toTrackingId(pickupId),
+    createdAt: formatPickupDate(pickup.createdAt),
+    createdAtMs: Date.parse(pickup.createdAt || '') || Date.now(),
+    status: normalizeFrontendPickupStatus(pickup.status),
+    pickupPartner:
+      pickup.recyclerAssignment?.recyclerName || pickup.recyclerAssignment?.recyclerPhone
+        ? {
+            name: pickup.recyclerAssignment.recyclerName || 'GreenByte Recycler',
+            phone: pickup.recyclerAssignment.recyclerPhone || ''
+          }
+        : createPickupPartner(pickupId),
+    assignedRecyclerPhone: pickup.recyclerAssignment?.recyclerPhone || '',
+    assignedRecyclerName: pickup.recyclerAssignment?.recyclerName || '',
+    recyclerDecisions: (pickup.recyclerDecisions || []).map((entry) => ({
+      recyclerPhone: entry.recyclerPhone || '',
+      recyclerName: entry.recyclerName || '',
+      decision: entry.decision === 'accepted' ? 'accepted' : 'rejected',
+      note: entry.note || ''
+    })),
+    requestMode: pickup.requestMode || 'pickup',
+    items: (pickup.items || []).map((item, index) => ({
+      id: `${pickupId}-${index}`,
+      category: item.category,
+      name: item.name,
+      unit: item.unit,
+      price: item.price,
+      quantity: item.quantity,
+      weightKg: item.weightKg || 0
+    })),
+    total: pickup.totalEstimate || 0,
+    pickupDetails: {
+      mode: pickup.requestMode || 'pickup',
+      date: pickup.schedule?.dateLabel || '',
+      time: pickup.schedule?.timeLabel || '',
+      address: pickup.address || '',
+      phone: pickup.phone || '',
+      notes: pickup.notes || ''
+    }
+  };
+}
+
+async function loadPickupHistoryForUser(userId) {
+  if (!userId) {
+    return [];
+  }
+
+  const response = await apiRequest(`/pickups?userId=${userId}`);
+  return (response.data || []).map(mapBackendPickupToFrontend).filter(Boolean);
 }
 
 function getPickupTracking(record, now = Date.now()) {
@@ -665,7 +761,7 @@ function LoginScreen({ navigation, route }) {
 }
 
 function OtpVerificationScreen({ navigation, route }) {
-  const { setUser } = useApp();
+  const { setUser, setPickupHistory } = useApp();
   const phone = route.params?.phone || '';
   const role = route.params?.role || 'customer';
   const firebasePhone = route.params?.firebasePhone || '';
@@ -693,12 +789,14 @@ function OtpVerificationScreen({ navigation, route }) {
       const firebaseUser = await firebaseAuth.signInWithCredential(credential);
       const verifiedDigits = normalizePhoneDigits(firebaseUser.user?.phoneNumber || phone);
       const response = await verifyRoleAccount(verifiedDigits, role);
+      const persistedPickups = await loadPickupHistoryForUser(response.data?._id);
 
       setUser((prev) => ({
         ...prev,
         ...response.data,
         availabilityStatus: prev.availabilityStatus || 'available'
       }));
+      setPickupHistory(persistedPickups);
       navigation.reset({
         index: 0,
         routes: [{ name: 'MainTabs' }]
@@ -788,7 +886,7 @@ function OtpVerificationScreen({ navigation, route }) {
 
 function HomeScreen({ navigation }) {
   const [refreshNow, setRefreshNow] = useState(Date.now());
-  const { pickupHistory } = useApp();
+  const { pickupHistory, user } = useApp();
   const latestPickup = pickupHistory[0];
   const tracking = getPickupTracking(latestPickup, refreshNow);
 
@@ -800,27 +898,55 @@ function HomeScreen({ navigation }) {
     return () => clearInterval(interval);
   }, []);
 
-  const metrics = [
-    { label: 'CO2 saved', value: '128 kg', icon: 'molecule-co2' },
-    { label: 'Trees saved', value: '19', icon: 'pine-tree' },
-    { label: 'Animals saved', value: '11', icon: 'paw' },
-    { label: 'Raw material', value: '350 kg', icon: 'factory' },
-    { label: 'Pickups completed', value: '8', icon: 'truck-check' }
+  const featureCards = [
+    {
+      icon: 'truck-fast-outline',
+      title: 'Doorstep Pickup',
+      text: 'Book a pickup in a few taps and let GreenByte collect your e-waste from your address.'
+    },
+    {
+      icon: 'clipboard-list-outline',
+      title: 'Easy Item Selection',
+      text: 'Choose appliances, gadgets, and mixed e-scrap with transparent pricing before you confirm.'
+    },
+    {
+      icon: 'map-marker-check-outline',
+      title: 'Track Every Request',
+      text: 'Follow your current request status and revisit past pickups from one place.'
+    }
   ];
 
   return (
     <ScreenShell>
       <ScrollView contentContainerStyle={styles.container}>
-        <ScreenHeader title="GreenByte Dashboard" subtitle="Your impact at a glance" />
-
-        <View style={styles.metricGrid}>
-          {metrics.map((m) => (
-            <View key={m.label} style={styles.metricCard}>
-              <MaterialCommunityIcons name={m.icon} size={24} color={THEME.primary} />
-              <Text style={styles.metricValue}>{m.value}</Text>
-              <Text style={styles.metricLabel}>{m.label}</Text>
+        <View style={styles.homeHeroCard}>
+          <View style={styles.homeHeroBrandRow}>
+            <View style={styles.homeLogoBadge}>
+              <MaterialCommunityIcons name="leaf-circle-outline" size={52} color={THEME.primary} />
             </View>
-          ))}
+            <View style={styles.homeHeroCopy}>
+              <Text style={styles.homeHeroEyebrow}>GreenByte</Text>
+              <Text style={styles.homeHeroTitle}>Smart e-waste pickup for homes and businesses</Text>
+              <Text style={styles.homeHeroText}>
+                Welcome{user?.name ? `, ${user.name}` : ''}. Schedule pickups, track ongoing requests, and manage
+                everything from one clean dashboard.
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.homeFeatureList}>
+            {featureCards.map((feature) => (
+              <View key={feature.title} style={styles.homeFeatureCard}>
+                <View style={styles.homeFeatureIcon}>
+                  <MaterialCommunityIcons name={feature.icon} size={22} color={THEME.primary} />
+                </View>
+                <View style={styles.homeFeatureCopy}>
+                  <Text style={styles.homeFeatureTitle}>{feature.title}</Text>
+                  <Text style={styles.homeFeatureText}>{feature.text}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
 
         {latestPickup ? (
@@ -1209,6 +1335,7 @@ function SchedulePickupScreen({ navigation }) {
 
 function OrderSummaryScreen({ navigation }) {
   const {
+    user,
     selectedItems,
     pickupDetails,
     pickupHistory,
@@ -1219,38 +1346,55 @@ function OrderSummaryScreen({ navigation }) {
 
   const total = selectedItems.reduce((sum, item) => sum + computeItemEstimate(item), 0);
 
-  const onConfirm = () => {
+  const onConfirm = async () => {
     if (!selectedItems.length) {
       Alert.alert('No items', 'Add items before confirming.');
       return;
     }
 
-    const now = new Date();
+    if (!user?._id) {
+      Alert.alert('Login required', 'Sign in again before confirming a pickup request.');
+      return;
+    }
 
-    const newRecord = {
-      id: `${now.getTime()}`,
-      trackingId: `GB-${String(now.getTime()).slice(-6)}`,
-      createdAt: now.toLocaleString(),
-      createdAtMs: now.getTime(),
-      status: 'submitted',
-      pickupPartner: createPickupPartner(now.getTime()),
-      recyclerDecisions: [],
-      requestMode: pickupDetails.mode || 'pickup',
-      items: selectedItems,
-      total,
-      pickupDetails
-    };
+    try {
+      const response = await apiRequest('/pickups', {
+        method: 'POST',
+        body: JSON.stringify({
+          userId: user._id,
+          items: selectedItems.map((item) => ({
+            category: item.category,
+            name: item.name,
+            quantity: item.quantity,
+            ...(item.unit === 'kg' ? { weightKg: item.weightKg } : {})
+          })),
+          schedule: {
+            dateLabel: pickupDetails.date || '',
+            timeLabel: pickupDetails.time || ''
+          },
+          requestMode: pickupDetails.mode || 'pickup',
+          address: pickupDetails.address || '',
+          phone: pickupDetails.phone || user.phone || '',
+          notes: pickupDetails.notes || '',
+          paymentMethod: 'upi'
+        })
+      });
 
-    setPickupHistory([newRecord, ...pickupHistory]);
-    setSelectedItems([]);
-    setPickupDetails({});
+      const newRecord = mapBackendPickupToFrontend(response.data);
 
-    Alert.alert('Pickup confirmed', 'Your GreenByte request was submitted successfully.', [
-      {
-        text: 'Track pickup',
-        onPress: () => navigation.navigate('TrackPickup', { pickupId: newRecord.id })
-      }
-    ]);
+      setPickupHistory([newRecord, ...pickupHistory.filter((entry) => entry.id !== newRecord.id)]);
+      setSelectedItems([]);
+      setPickupDetails({});
+
+      Alert.alert('Pickup confirmed', 'Your GreenByte request was saved to the system successfully.', [
+        {
+          text: 'Track pickup',
+          onPress: () => navigation.navigate('TrackPickup', { pickupId: newRecord.id })
+        }
+      ]);
+    } catch (error) {
+      Alert.alert('Could not confirm pickup', error.message);
+    }
   };
 
   return (
@@ -1859,7 +2003,7 @@ function TrackPickupScreen({ navigation, route }) {
 }
 
 function ProfileScreen({ navigation }) {
-  const { user, setUser, pickupHistory } = useApp();
+  const { user, setUser, pickupHistory, setPickupHistory } = useApp();
   const [name, setName] = useState(user.name);
   const [phone, setPhone] = useState(user.phone);
   const [address, setAddress] = useState(user.address);
@@ -1877,6 +2021,7 @@ function ProfileScreen({ navigation }) {
       address: '',
       availabilityStatus: 'available'
     });
+    setPickupHistory([]);
     navigation.getParent()?.replace('Login');
   };
 
@@ -2158,6 +2303,93 @@ const styles = StyleSheet.create({
   },
   sectionSubtitleCentered: {
     textAlign: 'center'
+  },
+  homeHeroCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    padding: 22,
+    marginBottom: 14,
+    shadowColor: '#0B2E26',
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 2
+  },
+  homeHeroBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16
+  },
+  homeLogoBadge: {
+    width: 92,
+    height: 92,
+    borderRadius: 24,
+    backgroundColor: '#E7F6EF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#CDE6DA'
+  },
+  homeHeroCopy: {
+    flex: 1
+  },
+  homeHeroEyebrow: {
+    color: THEME.primary,
+    fontSize: 13,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8
+  },
+  homeHeroTitle: {
+    color: THEME.text,
+    fontSize: 28,
+    fontWeight: '800',
+    lineHeight: 34,
+    marginTop: 6
+  },
+  homeHeroText: {
+    color: THEME.muted,
+    fontSize: 15,
+    lineHeight: 22,
+    marginTop: 10
+  },
+  homeFeatureList: {
+    marginTop: 18,
+    gap: 12
+  },
+  homeFeatureCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#F8FCFA',
+    borderRadius: 18,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#DCEDE6'
+  },
+  homeFeatureIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#E4F5EE',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  homeFeatureCopy: {
+    flex: 1
+  },
+  homeFeatureTitle: {
+    color: THEME.text,
+    fontSize: 16,
+    fontWeight: '800'
+  },
+  homeFeatureText: {
+    color: THEME.muted,
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 4
   },
   metricGrid: {
     flexDirection: 'row',
