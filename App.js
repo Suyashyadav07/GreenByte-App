@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useContext, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,10 +12,12 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
+import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { firebase, firebaseAuth, firebaseConfig } from './firebaseConfig';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -74,12 +77,82 @@ const ROLE_OPTIONS = [
   { value: 'admin', label: 'Admin' }
 ];
 
+// Replace localhost with your machine LAN IP when testing on a physical device.
 const API_BASE_URL = 'http://localhost:4000/api/v1';
+const DEFAULT_COUNTRY_CODE = '91';
 
 const AppContext = createContext(null);
 
 function useApp() {
   return useContext(AppContext);
+}
+
+function normalizePhoneDigits(phone) {
+  const digits = phone.replace(/\D/g, '');
+
+  if (digits.length === 12 && digits.startsWith(DEFAULT_COUNTRY_CODE)) {
+    return digits.slice(-10);
+  }
+
+  return digits;
+}
+
+function formatPhoneForFirebase(phone) {
+  const digits = phone.replace(/\D/g, '');
+
+  if (digits.length === 10) {
+    return `+${DEFAULT_COUNTRY_CODE}${digits}`;
+  }
+
+  if (digits.length >= 11 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+
+  return '';
+}
+
+async function verifyRoleAccount(phone, role) {
+  return apiRequest('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({
+      phone,
+      role
+    })
+  });
+}
+
+function getFirebaseAuthErrorMessage(error) {
+  const code = error?.code || '';
+
+  if (code.includes('invalid-phone-number')) {
+    return 'Enter a valid phone number with the correct country format.';
+  }
+
+  if (code.includes('too-many-requests')) {
+    return 'Firebase blocked more OTP attempts for now. Please wait and try again.';
+  }
+
+  if (code.includes('quota-exceeded')) {
+    return 'Your Firebase SMS quota is exhausted. Check the Firebase console.';
+  }
+
+  if (code.includes('captcha-check-failed') || code.includes('invalid-app-credential')) {
+    return 'reCAPTCHA verification failed. Please try sending the OTP again.';
+  }
+
+  if (code.includes('invalid-verification-code') || code.includes('code-expired')) {
+    return 'The OTP is invalid or expired. Please request a fresh code.';
+  }
+
+  if (code.includes('operation-not-allowed')) {
+    return 'Phone authentication is not enabled in Firebase Authentication.';
+  }
+
+  if (code.includes('network-request-failed')) {
+    return 'Network request failed. Confirm internet access and try again.';
+  }
+
+  return error?.message || 'Firebase authentication failed.';
 }
 
 function computeItemEstimate(item) {
@@ -495,32 +568,38 @@ function LoginScreen({ navigation, route }) {
   const [phone, setPhone] = useState(prefilledPhone);
   const [role, setRole] = useState(prefilledRole);
   const [submitting, setSubmitting] = useState(false);
+  const recaptchaVerifier = useRef(null);
 
   const onContinue = async () => {
-    const cleaned = phone.replace(/\D/g, '');
+    const cleaned = normalizePhoneDigits(phone);
+    const firebasePhone = formatPhoneForFirebase(phone);
+
     if (cleaned.length < 10) {
       Alert.alert('Invalid phone', 'Enter a valid mobile number.');
       return;
     }
 
+    if (!firebasePhone) {
+      Alert.alert('Invalid phone', 'Use a 10-digit number or include a valid country code.');
+      return;
+    }
+
     try {
       setSubmitting(true);
-      const response = await apiRequest('/auth/request-otp', {
-        method: 'POST',
-        body: JSON.stringify({
-          phone: cleaned,
-          role
-        })
-      });
+      await verifyRoleAccount(cleaned, role);
 
-      Alert.alert('OTP sent', `Demo OTP: ${response.data.demoOtp}`);
+      const phoneProvider = new firebase.auth.PhoneAuthProvider();
+      const verificationId = await phoneProvider.verifyPhoneNumber(firebasePhone, recaptchaVerifier.current);
+
+      Alert.alert('OTP sent', `A Firebase verification code was sent to ${firebasePhone}.`);
       navigation.navigate('OtpVerification', {
         phone: cleaned,
         role,
-        demoOtp: response.data.demoOtp
+        firebasePhone,
+        verificationId
       });
     } catch (error) {
-      Alert.alert('Login failed', error.message);
+      Alert.alert('Login failed', getFirebaseAuthErrorMessage(error));
     } finally {
       setSubmitting(false);
     }
@@ -528,11 +607,16 @@ function LoginScreen({ navigation, route }) {
 
   return (
     <ScreenShell>
+      <FirebaseRecaptchaVerifierModal
+        ref={recaptchaVerifier}
+        firebaseConfig={firebaseConfig}
+        attemptInvisibleVerification={Platform.OS !== 'web'}
+      />
       <View style={styles.containerFlex}>
         <View style={styles.authCard}>
           <ScreenHeader
             title="Login"
-            subtitle="Use your registered mobile number to receive an OTP"
+            subtitle="Use your registered mobile number to receive a Firebase OTP"
             centered
             compact
           />
@@ -584,27 +668,31 @@ function OtpVerificationScreen({ navigation, route }) {
   const { setUser } = useApp();
   const phone = route.params?.phone || '';
   const role = route.params?.role || 'customer';
+  const firebasePhone = route.params?.firebasePhone || '';
+  const initialVerificationId = route.params?.verificationId || '';
   const [otp, setOtp] = useState('');
-  const [demoOtp, setDemoOtp] = useState(route.params?.demoOtp || '');
+  const [verificationId, setVerificationId] = useState(initialVerificationId);
   const [submitting, setSubmitting] = useState(false);
   const [resending, setResending] = useState(false);
+  const recaptchaVerifier = useRef(null);
 
   const onVerify = async () => {
     if (otp.trim().length !== 6) {
-      Alert.alert('Invalid OTP', 'Enter the 6-digit OTP sent to your phone.');
+      Alert.alert('Invalid OTP', 'Enter the 6-digit OTP sent by Firebase.');
+      return;
+    }
+
+    if (!verificationId) {
+      Alert.alert('Missing verification', 'Please request a new OTP before trying again.');
       return;
     }
 
     try {
       setSubmitting(true);
-      const response = await apiRequest('/auth/verify-otp', {
-        method: 'POST',
-        body: JSON.stringify({
-          phone,
-          role,
-          otp: otp.trim()
-        })
-      });
+      const credential = firebase.auth.PhoneAuthProvider.credential(verificationId, otp.trim());
+      const firebaseUser = await firebaseAuth.signInWithCredential(credential);
+      const verifiedDigits = normalizePhoneDigits(firebaseUser.user?.phoneNumber || phone);
+      const response = await verifyRoleAccount(verifiedDigits, role);
 
       setUser((prev) => ({
         ...prev,
@@ -616,7 +704,7 @@ function OtpVerificationScreen({ navigation, route }) {
         routes: [{ name: 'MainTabs' }]
       });
     } catch (error) {
-      Alert.alert('Verification failed', error.message);
+      Alert.alert('Verification failed', getFirebaseAuthErrorMessage(error));
     } finally {
       setSubmitting(false);
     }
@@ -625,17 +713,15 @@ function OtpVerificationScreen({ navigation, route }) {
   const onResend = async () => {
     try {
       setResending(true);
-      const response = await apiRequest('/auth/request-otp', {
-        method: 'POST',
-        body: JSON.stringify({
-          phone,
-          role
-        })
-      });
-      setDemoOtp(response.data.demoOtp);
-      Alert.alert('OTP resent', `Demo OTP: ${response.data.demoOtp}`);
+      await verifyRoleAccount(phone, role);
+
+      const phoneProvider = new firebase.auth.PhoneAuthProvider();
+      const nextVerificationId = await phoneProvider.verifyPhoneNumber(firebasePhone, recaptchaVerifier.current);
+
+      setVerificationId(nextVerificationId);
+      Alert.alert('OTP resent', `A new Firebase OTP was sent to ${firebasePhone}.`);
     } catch (error) {
-      Alert.alert('Resend failed', error.message);
+      Alert.alert('Resend failed', getFirebaseAuthErrorMessage(error));
     } finally {
       setResending(false);
     }
@@ -643,11 +729,16 @@ function OtpVerificationScreen({ navigation, route }) {
 
   return (
     <ScreenShell>
+      <FirebaseRecaptchaVerifierModal
+        ref={recaptchaVerifier}
+        firebaseConfig={firebaseConfig}
+        attemptInvisibleVerification={Platform.OS !== 'web'}
+      />
       <View style={styles.containerFlex}>
         <View style={styles.authCard}>
           <ScreenHeader
             title="Verify OTP"
-            subtitle={`Enter the OTP sent to ${phone}`}
+            subtitle={`Enter the OTP sent to ${firebasePhone || phone}`}
             centered
             compact
           />
@@ -663,10 +754,10 @@ function OtpVerificationScreen({ navigation, route }) {
           />
 
           <View style={styles.otpHintCard}>
-            <Text style={styles.otpHintLabel}>Demo OTP</Text>
-            <Text style={styles.otpHintValue}>{demoOtp || 'Request OTP first'}</Text>
+            <Text style={styles.otpHintLabel}>Firebase OTP</Text>
+            <Text style={styles.otpHintValue}>{firebasePhone || 'Phone not available'}</Text>
             <Text style={styles.otpHintText}>
-              Replace this with an SMS gateway later. For now the generated OTP is shown here for testing.
+              If the SMS does not arrive, confirm Phone Authentication is enabled and resend the code.
             </Text>
           </View>
 
