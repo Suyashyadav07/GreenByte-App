@@ -100,6 +100,23 @@ const deleteRequest = asyncHandler(async (req, res) => {
   });
 });
 
+const updateRequestStatus = asyncHandler(async (req, res) => {
+  const { pickupId } = req.params;
+  const { status } = req.body;
+
+  if (!pickupId || !/^[a-f0-9]{24}$/i.test(pickupId)) {
+    return res.status(400).json({ success: false, message: 'Invalid pickup ID' });
+  }
+
+  const { updatePickupStatus } = require('../services/pickupService');
+  const pickup = await updatePickupStatus(pickupId, status);
+
+  res.json({
+    success: true,
+    data: pickup
+  });
+});
+
 module.exports = {
   getOverview,
   listRequests,
@@ -107,5 +124,6 @@ module.exports = {
   scrutinizeRequest,
   payPickup,
   assignRecyclerToPickup,
-  deleteRequest
+  deleteRequest,
+  updateRequestStatus
 };

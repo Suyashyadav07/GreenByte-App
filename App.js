@@ -232,9 +232,9 @@ const REQUEST_STATUS_META = {
   admin_negotiated:  { label: 'Negotiation Pending', tone: 'warning' },
   price_accepted:    { label: 'Awaiting recycler', tone: 'neutral' },
   assigned:          { label: 'Recycler assigned', tone: 'active' },
-  in_transit:        { label: 'Vehicle on the way', tone: 'active' },
-  collected:         { label: 'Items collected', tone: 'active' },
-  recycled:          { label: 'Recycled – awaiting payment', tone: 'warning' },
+  in_transit:        { label: 'Sent to Facility', tone: 'active' },
+  collected:         { label: 'Collected by Recycler', tone: 'active' },
+  recycled:          { label: 'At Facility (Awaiting Payment)', tone: 'warning' },
   paid:              { label: 'Payment issued', tone: 'success' },
   completed:         { label: 'Completed', tone: 'success' },
   rejected:          { label: 'Rejected', tone: 'danger' },
@@ -1838,16 +1838,12 @@ function RecyclerAssignedScreen({ navigation }) {
   );
 
   const onAdvance = async (requestId, currentStatus) => {
-    const nextStatus =
-      currentStatus === 'assigned'
-        ? 'in_transit'
-        : currentStatus === 'in_transit'
-          ? 'collected'
-          : currentStatus === 'collected'
-            ? 'recycled'
-            : currentStatus;
+    const nextStatus = {
+      assigned: 'collected',
+      collected: 'in_transit'
+    }[currentStatus];
 
-    if (nextStatus === currentStatus) return;
+    if (!nextStatus) return;
 
     try {
       await apiRequest(`/recyclers/${user._id}/requests/${requestId}/status`, {
@@ -1866,6 +1862,13 @@ function RecyclerAssignedScreen({ navigation }) {
     }
   };
 
+  const getButtonLabel = (status) => {
+    return {
+      assigned: 'Mark as Collected',
+      collected: 'Send to Facility'
+    }[status];
+  };
+
   return (
     <ScreenShell>
       <ScrollView contentContainerStyle={styles.container}>
@@ -1878,14 +1881,7 @@ function RecyclerAssignedScreen({ navigation }) {
         ) : (
           assignedRequests.map((request) => {
             const statusMeta = getRequestStatusMeta(request.status);
-            const actionText =
-              request.status === 'assigned'
-                ? 'Start Route'
-                : request.status === 'in_transit'
-                  ? 'Mark Collected'
-                  : request.status === 'collected'
-                    ? 'Mark Recycled'
-                    : null;
+            const actionText = getButtonLabel(request.status);
 
             return (
               <View key={request.id} style={styles.listCard}>
@@ -2351,6 +2347,30 @@ function TrackPickupScreen({ navigation, route }) {
               }}
             >
               <Text style={styles.primaryButtonText}>Process Payment</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {user.role === 'admin' && pickup.status === 'in_transit' && (
+          <View style={styles.listCard}>
+            <Text style={styles.cardTitle}>Warehouse Control</Text>
+            <Text style={styles.summaryLabel}>Waste has been sent to the facility. Verify and mark as recycled.</Text>
+            <Pressable
+              style={styles.primaryButton}
+              onPress={async () => {
+                try {
+                  await apiRequest(`/admin/requests/${pickup.id}/status`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ status: 'recycled' })
+                  });
+                  await refetchPickup();
+                  showToast('Request marked as Recycled.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Mark as Recycled</Text>
             </Pressable>
           </View>
         )}
