@@ -60,7 +60,7 @@ const pickupIdParamsSchema = z.object({
 });
 
 const recyclerQueueQuerySchema = z.object({
-  scope: z.enum(['open', 'assigned']).default('open')
+  scope: z.enum(['open', 'assigned', 'all']).default('open')
 });
 
 const recyclerIdParamsSchema = z.object({

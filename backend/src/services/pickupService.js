@@ -204,16 +204,29 @@ async function listRecyclerQueue(recyclerId, scope = 'open') {
     throw new ApiError(404, 'Recycler not found');
   }
 
-  const query =
-    scope === 'assigned'
-      ? {
-          'recyclerAssignment.recycler': recycler._id,
-          status: { $in: ['assigned', 'in_transit', 'collected', 'recycled', 'paid', 'completed'] }
+  let query;
+  if (scope === 'assigned') {
+    query = {
+      'recyclerAssignment.recycler': recycler._id,
+      status: { $in: ['assigned', 'in_transit', 'collected', 'recycled', 'paid', 'completed'] }
+    };
+  } else if (scope === 'open') {
+    query = {
+      status: { $in: ['submitted', 'estimated', 'price_accepted'] },
+      'recyclerAssignment.recycler': null
+    };
+  } else {
+    // scope === 'all'
+    query = {
+      $or: [
+        { 'recyclerAssignment.recycler': recycler._id },
+        { 
+          'recyclerAssignment.recycler': null, 
+          status: { $in: ['submitted', 'estimated', 'price_accepted'] } 
         }
-      : {
-          status: { $in: ['submitted', 'estimated', 'price_accepted'] },
-          'recyclerAssignment.recycler': null
-        };
+      ]
+    };
+  }
 
   return Pickup.find(query).sort({ createdAt: -1 }).lean();
 }
@@ -384,7 +397,7 @@ async function adminPayPickup(pickupId, adminId, note = '') {
     throw new ApiError(400, 'Pickup must be recycled before payment can be issued');
   }
 
-  pickup.status = 'paid';
+  pickup.status = 'completed';
   pickup.payment.status = 'paid';
   pickup.payment.paidAt = new Date();
 
@@ -396,7 +409,7 @@ async function adminPayPickup(pickupId, adminId, note = '') {
   }
 
   appendActivity(pickup, {
-    status: 'paid',
+    status: 'completed',
     actorRole: 'admin',
     actorId: adminId,
     note: note || 'Admin processed the payment and completed the pickup'

@@ -300,10 +300,11 @@ function mapBackendPickupToFrontend(pickup) {
             phone: pickup.recyclerAssignment.recyclerPhone || ''
           }
         : createPickupPartner(pickupId),
+    assignedRecyclerId: pickup.recyclerAssignment?.recycler || '',
     assignedRecyclerPhone: pickup.recyclerAssignment?.recyclerPhone || '',
     assignedRecyclerName: pickup.recyclerAssignment?.recyclerName || '',
     recyclerDecisions: (pickup.recyclerDecisions || []).map((entry) => ({
-      recyclerPhone: entry.recyclerPhone || '',
+      recyclerId: entry.recycler || '',
       recyclerName: entry.recyclerName || '',
       decision: entry.decision === 'accepted' ? 'accepted' : 'rejected',
       note: entry.note || ''
@@ -1384,11 +1385,13 @@ function SchedulePickupScreen({ navigation }) {
 
   const dropoffOptions = React.useMemo(() => {
     return recyclers.flatMap(r => {
-      const name = r.companyName || r.user?.name || 'Recycler';
-      const points = r.collectionPoints?.length ? r.collectionPoints : ['Main Facility'];
+      const name = r.companyName || r.user?.organizationName || r.user?.name || 'Recycler';
+      const address = r.user?.address || 'Main Facility';
+      const points = r.collectionPoints?.length ? r.collectionPoints : [address];
+      
       return points.map(pt => ({
-        label: `${name} - ${pt}`,
-        value: `${name} - ${pt}`
+        label: pt === address ? `${name} (${pt})` : `${name} - ${pt}`,
+        value: pt === address ? `${name} - ${pt}` : `${name} - ${pt}`
       }));
     });
   }, [recyclers]);
@@ -1658,7 +1661,7 @@ function RecyclerOperationsScreen() {
   React.useEffect(() => {
     const fetchRecyclerQueue = async () => {
       try {
-        const res = await apiRequest(`/recyclers/${user._id}/queue?scope=open`);
+        const res = await apiRequest(`/recyclers/${user._id}/requests?scope=all`);
         setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
       } catch (e) {
         console.error(e);
@@ -1670,13 +1673,14 @@ function RecyclerOperationsScreen() {
   const availabilityStatus = user.availabilityStatus || 'available';
   const openRequests = pickupHistory.filter((request) => {
     const rejectedByMe = request.recyclerDecisions?.some(
-      (entry) => entry.recyclerPhone === user.phone && entry.decision === 'rejected'
+      (entry) => entry.recyclerId === user._id && entry.decision === 'rejected'
     );
 
-    return request.status === 'price_accepted' && !request.assignedRecyclerPhone && !rejectedByMe;
+    return request.status === 'price_accepted' && !request.assignedRecyclerId && !rejectedByMe;
   });
 
-  const assignedCount = pickupHistory.filter((request) => request.assignedRecyclerPhone === user.phone).length;
+  const assignedRequests = pickupHistory.filter((request) => request.assignedRecyclerId === user._id);
+  const assignedCount = assignedRequests.length;
 
   const onChangeAvailability = () => {
     const next =
@@ -1703,6 +1707,7 @@ function RecyclerOperationsScreen() {
                 status: 'assigned',
                 assignedRecyclerName: user.name,
                 assignedRecyclerPhone: user.phone,
+                assignedRecyclerId: user._id,
                 pickupPartner: {
                   name: user.name,
                   phone: user.phone
@@ -1755,6 +1760,39 @@ function RecyclerOperationsScreen() {
           </View>
         </View>
 
+        {assignedRequests.length > 0 && (
+          <View style={styles.listCard}>
+            <View style={styles.trackingHeroHeader}>
+               <Text style={[styles.cardTitle, { flex: 1 }]}>Your Active Jobs</Text>
+               <Pressable onPress={() => navigation.navigate('Assigned')}>
+                 <Text style={[styles.trackingHeroLink, { marginTop: 0 }]}>View all</Text>
+               </Pressable>
+            </View>
+            {assignedRequests.slice(0, 2).map((request) => (
+              <View key={request.id} style={styles.requestCard}>
+                <View style={styles.requestCardHeader}>
+                  <View>
+                    <Text style={styles.requestCardTitle}>{request.trackingId}</Text>
+                    <Text style={styles.requestCardMeta}>
+                      {request.items.length} items | Value ₹{request.totalEstimate || 0}
+                    </Text>
+                  </View>
+                  <View style={[styles.statusBadge, styles.statusBadgeActive]}>
+                    <Text style={styles.statusBadgeText}>Assigned</Text>
+                  </View>
+                </View>
+                <Text style={styles.requestDetailLine}>Location: {request.pickupDetails?.address || '-'}</Text>
+                <Pressable 
+                  style={[styles.primaryMiniButton, { marginTop: 8 }]} 
+                  onPress={() => navigation.navigate('Assigned')}
+                >
+                  <Text style={styles.primaryMiniButtonText}>Update Progress</Text>
+                </Pressable>
+              </View>
+            ))}
+          </View>
+        )}
+
         <View style={styles.listCard}>
           <Text style={styles.cardTitle}>New Collection Requests</Text>
           {!openRequests.length ? (
@@ -1796,7 +1834,7 @@ function RecyclerAssignedScreen({ navigation }) {
   const showToast = useToast();
   const { user, pickupHistory, setPickupHistory } = useApp();
   const assignedRequests = pickupHistory.filter(
-    (request) => request.assignedRecyclerPhone === user.phone && request.status !== 'rejected'
+    (request) => request.assignedRecyclerId === user._id && request.status !== 'rejected'
   );
 
   const onAdvance = async (requestId, currentStatus) => {
@@ -2461,9 +2499,22 @@ function ProfileScreen({ navigation }) {
   const [phone, setPhone] = useState(user.phone);
   const [address, setAddress] = useState(user.address);
 
-  const onSave = () => {
-    setUser((prev) => ({ ...prev, name, phone, address }));
-    showToast('Profile updated.');
+  const [saving, setSaving] = useState(false);
+  
+  const onSave = async () => {
+    try {
+      setSaving(true);
+      const res = await apiRequest(`/users/${user._id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, phone, address })
+      });
+      setUser(res.data);
+      showToast('Profile updated persistently.');
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const onLogout = () => {
@@ -2497,8 +2548,12 @@ function ProfileScreen({ navigation }) {
         <Text style={styles.label}>Address</Text>
         <TextInput value={address} onChangeText={setAddress} style={styles.input} multiline />
 
-        <Pressable style={styles.secondaryButton} onPress={onSave}>
-          <Text style={styles.secondaryButtonText}>Save Profile</Text>
+        <Pressable 
+          style={[styles.secondaryButton, saving && styles.buttonDisabled]} 
+          onPress={onSave}
+          disabled={saving}
+        >
+          <Text style={styles.secondaryButtonText}>{saving ? 'Saving...' : 'Save Profile'}</Text>
         </Pressable>
 
         <View style={styles.listCard}>

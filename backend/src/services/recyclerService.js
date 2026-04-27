@@ -44,7 +44,7 @@ async function upsertRecyclerProfile(recyclerId, payload) {
 async function getRecyclerProfile(recyclerId) {
   await ensureRecycler(recyclerId);
 
-  const profile = await RecyclerProfile.findOne({ user: recyclerId }).populate('user', 'name phone email role organizationName');
+  const profile = await RecyclerProfile.findOne({ user: recyclerId }).populate('user', 'name phone email role organizationName address');
 
   if (!profile) {
     throw new ApiError(404, 'Recycler profile not found');
@@ -74,10 +74,25 @@ async function updateRecyclerAvailability(recyclerId, availabilityStatus) {
 }
 
 async function listRecyclerProfiles() {
-  return RecyclerProfile.find()
-    .sort({ createdAt: -1 })
-    .populate('user', 'name phone email role organizationName isVerified')
+  const users = await User.find({ role: 'recycler' })
+    .select('name phone email role organizationName isVerified address')
     .lean();
+    
+  const profiles = await RecyclerProfile.find({ 
+    user: { $in: users.map(u => u._id) } 
+  }).lean();
+
+  return users.map(u => {
+    const profile = profiles.find(p => p.user.toString() === u._id.toString());
+    return {
+      ...(profile || {
+        companyName: u.organizationName || u.name,
+        collectionPoints: [],
+        availabilityStatus: 'available'
+      }),
+      user: u
+    };
+  });
 }
 
 module.exports = {
