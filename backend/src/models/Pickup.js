@@ -38,6 +38,18 @@ const pickupItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: 0
+    },
+    condition: {
+      type: String,
+      default: ''
+    },
+    yearOfManufacturing: {
+      type: Number,
+      default: null
+    },
+    photoUri: {
+      type: String,
+      default: ''
     }
   },
   { _id: false }
@@ -60,7 +72,7 @@ const pickupSchema = new mongoose.Schema(
     },
     schedule: {
       dateLabel: { type: String, required: true },
-      timeLabel: { type: String, required: true }
+      timeLabel: { type: String, default: '' }
     },
     requestMode: {
       type: String,
@@ -84,6 +96,7 @@ const pickupSchema = new mongoose.Schema(
       enum: [
         'submitted',
         'estimated',
+        'admin_negotiated',
         'price_accepted',
         'assigned',
         'in_transit',
@@ -102,6 +115,10 @@ const pickupSchema = new mongoose.Schema(
         type: Number,
         required: true,
         min: 0
+      },
+      negotiatedAmount: {
+        type: Number,
+        default: null
       },
       acceptedByUser: {
         type: Boolean,

@@ -55,9 +55,32 @@ const changeStatus = asyncHandler(async (req, res) => {
   });
 });
 
+const remove = asyncHandler(async (req, res) => {
+  const { pickupId } = validate(pickupIdParamsSchema, req.params);
+  await require('../services/pickupService').removePickup(pickupId);
+
+  res.json({
+    success: true,
+    message: 'Pickup request deleted successfully'
+  });
+});
+
+const respondNegotiation = asyncHandler(async (req, res) => {
+  const { pickupId } = req.params;
+  const { userId, accept } = req.body;
+  const pickup = await require('../services/pickupService').customerRespondNegotiation(pickupId, userId, accept);
+
+  res.json({
+    success: true,
+    data: pickup
+  });
+});
+
 module.exports = {
   estimate,
   create,
   list,
-  changeStatus
+  changeStatus,
+  remove,
+  respondNegotiation
 };

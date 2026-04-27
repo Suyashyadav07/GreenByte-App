@@ -12,11 +12,12 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
-import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
+// Firebase reCAPTCHA removed
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { firebase, firebaseAuth, firebaseConfig } from './firebaseClient';
 
 const Stack = createNativeStackNavigator();
@@ -82,9 +83,14 @@ const API_BASE_URL = 'http://localhost:4000/api/v1';
 const DEFAULT_COUNTRY_CODE = '91';
 
 const AppContext = createContext(null);
+const ToastContext = createContext(null);
 
 function useApp() {
   return useContext(AppContext);
+}
+
+function useToast() {
+  return useContext(ToastContext);
 }
 
 function normalizePhoneDigits(phone) {
@@ -164,6 +170,18 @@ function computeItemEstimate(item) {
 
 const TRACKING_STEPS = [
   {
+    key: 'estimated',
+    title: 'Pending Admin Approval',
+    description: 'We are estimating your items using AI and awaiting admin approval.',
+    icon: 'clock-outline'
+  },
+  {
+    key: 'negotiating',
+    title: 'Price Negotiation',
+    description: 'Admin has proposed a new price. Please review and respond.',
+    icon: 'handshake-outline'
+  },
+  {
     key: 'confirmed',
     title: 'Request Confirmed',
     description: 'Your pickup request has been created and locked in.',
@@ -171,27 +189,33 @@ const TRACKING_STEPS = [
   },
   {
     key: 'assigned',
-    title: 'Pickup Partner Assigned',
-    description: 'A GreenByte pickup partner is reviewing your route details.',
+    title: 'Drop-off Location Approved',
+    description: 'Your drop-off location has been verified and approved.',
     icon: 'account-check-outline'
   },
   {
     key: 'onTheWay',
-    title: 'Truck On The Way',
-    description: 'The pickup vehicle has started moving toward your address.',
-    icon: 'truck-fast-outline'
+    title: 'Drop-off Pending',
+    description: 'Dropping off the waste at the recyclers place.',
+    icon: 'map-marker-path'
   },
   {
-    key: 'arriving',
-    title: 'Arriving Soon',
-    description: 'The team is very close. Keep your items ready at the gate.',
-    icon: 'map-marker-radius-outline'
+    key: 'collected',
+    title: 'Collected',
+    description: 'The e-waste has been collected and is being transported.',
+    icon: 'package-variant-closed'
+  },
+  {
+    key: 'recycled',
+    title: 'Recycled',
+    description: 'Your items have been safely recycled.',
+    icon: 'recycle'
   },
   {
     key: 'completed',
-    title: 'Pickup Completed',
-    description: 'Your e-waste has been collected successfully.',
-    icon: 'check-decagram-outline'
+    title: 'Payment Issued',
+    description: 'Admin has issued payment for your request.',
+    icon: 'check-circle-outline'
   }
 ];
 
@@ -203,12 +227,18 @@ const PICKUP_PARTNERS = [
 ];
 
 const REQUEST_STATUS_META = {
-  submitted: { label: 'Awaiting recycler', tone: 'neutral' },
-  assigned: { label: 'Recycler assigned', tone: 'active' },
-  onTheWay: { label: 'Vehicle on the way', tone: 'active' },
-  arriving: { label: 'Arriving soon', tone: 'warning' },
-  completed: { label: 'Completed', tone: 'success' },
-  rejected: { label: 'Skipped by recycler', tone: 'danger' }
+  submitted:         { label: 'Submitted', tone: 'neutral' },
+  estimated:         { label: 'Pending Admin Approval', tone: 'warning' },
+  admin_negotiated:  { label: 'Negotiation Pending', tone: 'warning' },
+  price_accepted:    { label: 'Awaiting recycler', tone: 'neutral' },
+  assigned:          { label: 'Recycler assigned', tone: 'active' },
+  in_transit:        { label: 'Vehicle on the way', tone: 'active' },
+  collected:         { label: 'Items collected', tone: 'active' },
+  recycled:          { label: 'Recycled – awaiting payment', tone: 'warning' },
+  paid:              { label: 'Payment issued', tone: 'success' },
+  completed:         { label: 'Completed', tone: 'success' },
+  rejected:          { label: 'Rejected', tone: 'danger' },
+  cancelled:         { label: 'Cancelled', tone: 'danger' }
 };
 
 function getPickupCreatedAtMs(record) {
@@ -221,21 +251,14 @@ function getPickupCreatedAtMs(record) {
 }
 
 function normalizeFrontendPickupStatus(status) {
-  const statusMap = {
-    submitted: 'submitted',
-    estimated: 'submitted',
-    price_accepted: 'submitted',
-    assigned: 'assigned',
-    in_transit: 'onTheWay',
-    collected: 'arriving',
-    recycled: 'completed',
-    paid: 'completed',
-    completed: 'completed',
-    rejected: 'rejected',
-    cancelled: 'rejected'
-  };
-
-  return statusMap[status] || 'submitted';
+  // Pass backend statuses through directly — do NOT mangle them.
+  // The tracking system and UI both read status directly.
+  const validStatuses = [
+    'submitted', 'estimated', 'admin_negotiated', 'price_accepted',
+    'assigned', 'in_transit', 'collected', 'recycled',
+    'paid', 'completed', 'rejected', 'cancelled'
+  ];
+  return validStatuses.includes(status) ? status : 'estimated';
 }
 
 function formatPickupDate(value) {
@@ -295,7 +318,12 @@ function mapBackendPickupToFrontend(pickup) {
       quantity: item.quantity,
       weightKg: item.weightKg || 0
     })),
-    total: pickup.totalEstimate || 0,
+    totalEstimate: pickup.totalEstimate || 0,
+    pricing: {
+      estimatedAmount: pickup.pricing?.estimatedAmount || 0,
+      negotiatedAmount: pickup.pricing?.negotiatedAmount || null,
+      acceptedByUser: pickup.pricing?.acceptedByUser ?? true
+    },
     pickupDetails: {
       mode: pickup.requestMode || 'pickup',
       date: pickup.schedule?.dateLabel || '',
@@ -321,13 +349,33 @@ function getPickupTracking(record, now = Date.now()) {
     return null;
   }
 
+  if (record.status === 'cancelled') {
+    return {
+      activeStep: -1,
+      currentStep: { title: 'Cancelled', description: 'This pickup request was cancelled.' },
+      etaText: 'N/A'
+    };
+  }
+  
+  if (record.status === 'rejected') {
+    return {
+      activeStep: -1,
+      currentStep: { title: 'Rejected', description: 'This pickup request was rejected.' },
+      etaText: 'N/A'
+    };
+  }
+
   const explicitStepMap = {
+    estimated: 0,
     submitted: 0,
-    assigned: 1,
-    onTheWay: 2,
-    arriving: 3,
-    completed: 4,
-    rejected: 0
+    admin_negotiated: 1,
+    price_accepted: 2,
+    assigned: 3,
+    in_transit: 4,
+    collected: 5,
+    recycled: 6,
+    paid: 7,
+    completed: 7
   };
 
   const elapsedMinutes = Math.max(0, Math.floor((now - getPickupCreatedAtMs(record)) / 60000));
@@ -335,31 +383,35 @@ function getPickupTracking(record, now = Date.now()) {
   let activeStep = explicitStepMap[record.status];
   if (typeof activeStep !== 'number') {
     if (record.status === 'completed' || elapsedMinutes >= 9) {
-      activeStep = 4;
+      activeStep = 5;
     } else if (elapsedMinutes >= 6) {
-      activeStep = 3;
+      activeStep = 4;
     } else if (elapsedMinutes >= 3) {
-      activeStep = 2;
+      activeStep = 3;
     } else if (elapsedMinutes >= 1) {
-      activeStep = 1;
+      activeStep = 2;
     } else {
-      activeStep = 0;
+      activeStep = 1;
     }
   }
 
-  const currentStep = TRACKING_STEPS[activeStep];
+  const currentStep = TRACKING_STEPS[Math.min(activeStep, TRACKING_STEPS.length - 1)];
   const etaText =
-    record.status === 'rejected'
-      ? 'A recycler skipped this request. It is waiting for another partner.'
-      : activeStep === 4
-      ? 'Collected successfully'
-      : activeStep === 3
-        ? 'Driver is about to reach you'
-        : activeStep === 2
-          ? 'About 15 to 20 minutes away'
-          : activeStep === 1
-            ? 'Partner assignment in progress'
-            : 'Confirming route and vehicle';
+    activeStep === 7
+      ? 'Payment issued. Request complete!'
+      : activeStep === 6
+        ? 'Items recycled – awaiting admin payment'
+        : activeStep === 5
+          ? 'Items dropped off and being processed'
+          : activeStep === 4
+            ? 'Awaiting customer drop-off at the facility'
+            : activeStep === 3
+              ? 'Drop-off location approved'
+              : activeStep === 2
+                ? 'Price confirmed – awaiting drop-off location approval'
+                : activeStep === 1
+                  ? 'Admin has proposed a new price. Please review.'
+                  : 'Awaiting admin to scrutinize AI price';
 
   return {
     activeStep,
@@ -401,6 +453,33 @@ function ScreenShell({ children }) {
       <StatusBar style="dark" />
       {children}
     </LinearGradient>
+  );
+}
+
+function ToastBanner({ toast, onDismiss }) {
+  if (!toast) return null;
+  const isError = toast.type === 'error';
+  const bgColor = isError ? '#FFE8E5' : '#E8F6EF';
+  const borderColor = isError ? '#F5A9A0' : '#A3D9C0';
+  const textColor = isError ? '#A13A2A' : '#0B6B4B';
+  const icon = isError ? 'alert-circle-outline' : 'check-circle-outline';
+
+  return (
+    <Pressable
+      onPress={onDismiss}
+      style={{
+        position: 'absolute', top: 0, left: 0, right: 0, zIndex: 9999,
+        padding: 16, paddingTop: 48,
+        backgroundColor: bgColor, borderBottomWidth: 2, borderBottomColor: borderColor,
+        flexDirection: 'row', alignItems: 'center', gap: 10,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1, shadowRadius: 8, elevation: 8
+      }}
+    >
+      <MaterialCommunityIcons name={icon} size={22} color={textColor} />
+      <Text style={{ color: textColor, fontSize: 14, fontWeight: '600', flex: 1 }}>{toast.message}</Text>
+      <MaterialCommunityIcons name="close" size={18} color={textColor} />
+    </Pressable>
   );
 }
 
@@ -541,20 +620,28 @@ function OnboardingScreen({ navigation }) {
 }
 
 function RegisterScreen({ navigation }) {
+  const showToast = useToast();
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState('customer');
   const [organizationName, setOrganizationName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   const onRegister = async () => {
+    setErrorMessage('');
     const cleaned = phone.replace(/\D/g, '');
     if (name.trim().length < 2) {
-      Alert.alert('Invalid name', 'Enter your full name to register.');
+      setErrorMessage('Enter your full name to register.');
       return;
     }
     if (cleaned.length < 10) {
-      Alert.alert('Invalid phone', 'Enter a valid mobile number.');
+      setErrorMessage('Enter a valid mobile number.');
+      return;
+    }
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters.');
       return;
     }
 
@@ -565,18 +652,19 @@ function RegisterScreen({ navigation }) {
         body: JSON.stringify({
           name: name.trim(),
           phone: cleaned,
+          password,
           role,
           organizationName: role === 'customer' ? '' : organizationName.trim()
         })
       });
 
-      Alert.alert('Registration complete', 'Your account has been created. Please log in with OTP.');
+      showToast('Registration complete! Please log in.');
       navigation.replace('Login', {
         phone: cleaned,
         role
       });
     } catch (error) {
-      Alert.alert('Registration failed', error.message);
+      setErrorMessage(error.message);
     } finally {
       setSubmitting(false);
     }
@@ -588,7 +676,7 @@ function RegisterScreen({ navigation }) {
         <View style={styles.authCard}>
           <ScreenHeader
             title="Register"
-            subtitle="Create your GreenByte account before logging in with OTP"
+            subtitle="Create your GreenByte account"
             centered
             compact
           />
@@ -630,6 +718,16 @@ function RegisterScreen({ navigation }) {
             </>
           ) : null}
 
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            style={styles.input}
+            placeholder="Secure password (min 6 chars)"
+            placeholderTextColor="#91A79F"
+            secureTextEntry
+          />
+
           <Text style={styles.label}>Phone Number</Text>
           <TextInput
             value={phone}
@@ -640,6 +738,12 @@ function RegisterScreen({ navigation }) {
             placeholderTextColor="#91A79F"
             maxLength={15}
           />
+
+          {errorMessage ? (
+            <View style={{ backgroundColor: '#FFE8E5', padding: 12, borderRadius: 10, marginBottom: 14 }}>
+              <Text style={{ color: '#A13A2A', fontSize: 13, fontWeight: '600' }}>{errorMessage}</Text>
+            </View>
+          ) : null}
 
           <Pressable
             style={[styles.primaryButton, submitting && styles.buttonDisabled]}
@@ -659,43 +763,45 @@ function RegisterScreen({ navigation }) {
 }
 
 function LoginScreen({ navigation, route }) {
+  const showToast = useToast();
   const prefilledPhone = route.params?.phone || '';
   const prefilledRole = route.params?.role || 'customer';
   const [phone, setPhone] = useState(prefilledPhone);
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState(prefilledRole);
   const [submitting, setSubmitting] = useState(false);
-  const recaptchaVerifier = useRef(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const { setUser, setPickupHistory } = useApp();
 
   const onContinue = async () => {
+    setErrorMessage('');
     const cleaned = normalizePhoneDigits(phone);
-    const firebasePhone = formatPhoneForFirebase(phone);
 
     if (cleaned.length < 10) {
-      Alert.alert('Invalid phone', 'Enter a valid mobile number.');
+      setErrorMessage('Enter a valid mobile number.');
       return;
     }
 
-    if (!firebasePhone) {
-      Alert.alert('Invalid phone', 'Use a 10-digit number or include a valid country code.');
+    if (password.length < 6) {
+      setErrorMessage('Enter a valid password (min 6 characters).');
       return;
     }
 
     try {
       setSubmitting(true);
-      await verifyRoleAccount(cleaned, role);
-
-      const phoneProvider = new firebase.auth.PhoneAuthProvider();
-      const verificationId = await phoneProvider.verifyPhoneNumber(firebasePhone, recaptchaVerifier.current);
-
-      Alert.alert('OTP sent', `A Firebase verification code was sent to ${firebasePhone}.`);
-      navigation.navigate('OtpVerification', {
-        phone: cleaned,
-        role,
-        firebasePhone,
-        verificationId
+      const response = await apiRequest('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ phone: cleaned, role, password })
       });
+      
+      const persistedPickups = await loadPickupHistoryForUser(response.data?._id);
+      setUser(response.data);
+      setPickupHistory(persistedPickups);
+      
+      showToast(`Welcome back, ${response.data.name}!`);
+      navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
     } catch (error) {
-      Alert.alert('Login failed', getFirebaseAuthErrorMessage(error));
+      setErrorMessage(error.message);
     } finally {
       setSubmitting(false);
     }
@@ -703,16 +809,11 @@ function LoginScreen({ navigation, route }) {
 
   return (
     <ScreenShell>
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifier}
-        firebaseConfig={firebaseConfig}
-        attemptInvisibleVerification={Platform.OS !== 'web'}
-      />
       <View style={styles.containerFlex}>
         <View style={styles.authCard}>
           <ScreenHeader
             title="Login"
-            subtitle="Use your registered mobile number to receive a Firebase OTP"
+            subtitle="Enter your phone number and password"
             centered
             compact
           />
@@ -743,12 +844,30 @@ function LoginScreen({ navigation, route }) {
             maxLength={15}
           />
 
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            style={styles.input}
+            placeholder="Your password"
+            placeholderTextColor="#91A79F"
+            secureTextEntry
+          />
+
+          {errorMessage ? (
+            <View style={{ backgroundColor: '#FFE8E5', padding: 12, borderRadius: 10, marginBottom: 14 }}>
+              <Text style={{ color: '#A13A2A', fontSize: 13, fontWeight: '600' }}>{errorMessage}</Text>
+            </View>
+          ) : null}
+
           <Pressable
             style={[styles.primaryButton, submitting && styles.buttonDisabled]}
             onPress={onContinue}
             disabled={submitting}
           >
-            <Text style={styles.primaryButtonText}>{submitting ? 'Sending OTP...' : 'Send OTP'}</Text>
+            <Text style={styles.primaryButtonText}>
+              {submitting ? 'Logging in...' : 'Log in'}
+            </Text>
           </Pressable>
 
           <Pressable style={styles.textButton} onPress={() => navigation.replace('Register')}>
@@ -761,6 +880,7 @@ function LoginScreen({ navigation, route }) {
 }
 
 function OtpVerificationScreen({ navigation, route }) {
+  const showToast = useToast();
   const { setUser, setPickupHistory } = useApp();
   const phone = route.params?.phone || '';
   const role = route.params?.role || 'customer';
@@ -774,12 +894,12 @@ function OtpVerificationScreen({ navigation, route }) {
 
   const onVerify = async () => {
     if (otp.trim().length !== 6) {
-      Alert.alert('Invalid OTP', 'Enter the 6-digit OTP sent by Firebase.');
+      showToast('Enter the 6-digit OTP sent by Firebase.', 'error');
       return;
     }
 
     if (!verificationId) {
-      Alert.alert('Missing verification', 'Please request a new OTP before trying again.');
+      showToast('Please request a new OTP before trying again.', 'error');
       return;
     }
 
@@ -802,7 +922,7 @@ function OtpVerificationScreen({ navigation, route }) {
         routes: [{ name: 'MainTabs' }]
       });
     } catch (error) {
-      Alert.alert('Verification failed', getFirebaseAuthErrorMessage(error));
+      showToast(getFirebaseAuthErrorMessage(error), 'error');
     } finally {
       setSubmitting(false);
     }
@@ -817,9 +937,9 @@ function OtpVerificationScreen({ navigation, route }) {
       const nextVerificationId = await phoneProvider.verifyPhoneNumber(firebasePhone, recaptchaVerifier.current);
 
       setVerificationId(nextVerificationId);
-      Alert.alert('OTP resent', `A new Firebase OTP was sent to ${firebasePhone}.`);
+      showToast(`OTP resent to ${firebasePhone}`);
     } catch (error) {
-      Alert.alert('Resend failed', getFirebaseAuthErrorMessage(error));
+      showToast(getFirebaseAuthErrorMessage(error), 'error');
     } finally {
       setResending(false);
     }
@@ -827,11 +947,6 @@ function OtpVerificationScreen({ navigation, route }) {
 
   return (
     <ScreenShell>
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifier}
-        firebaseConfig={firebaseConfig}
-        attemptInvisibleVerification={Platform.OS !== 'web'}
-      />
       <View style={styles.containerFlex}>
         <View style={styles.authCard}>
           <ScreenHeader
@@ -1006,7 +1121,23 @@ function SelectEWasteScreen({ navigation }) {
   const [itemName, setItemName] = useState(PRICE_CATALOG[categories[0]][0].name);
   const [quantity, setQuantity] = useState('1');
   const [weightKg, setWeightKg] = useState('');
+  const [condition, setCondition] = useState('working');
+  const [yearOfManufacturing, setYearOfManufacturing] = useState('');
+  const [photoUri, setPhotoUri] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [formError, setFormError] = useState('');
+
+  const pickImage = async () => {
+    let result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.5,
+    });
+
+    if (!result.canceled) {
+      setPhotoUri(result.assets[0].uri);
+    }
+  };
 
   const itemOptions = PRICE_CATALOG[category];
   const selectedMeta = itemOptions.find((x) => x.name === itemName);
@@ -1019,13 +1150,18 @@ function SelectEWasteScreen({ navigation }) {
   const resetForm = () => {
     setQuantity('1');
     setWeightKg('');
+    setCondition('working');
+    setYearOfManufacturing('');
+    setPhotoUri('');
     setEditingId(null);
+    setFormError('');
   };
 
   const onAddOrUpdate = () => {
+    setFormError('');
     const qty = parseInt(quantity, 10);
     if (!Number.isInteger(qty) || qty < 1) {
-      Alert.alert('Invalid quantity', 'Quantity must be at least 1.');
+      setFormError('Quantity must be at least 1.');
       return;
     }
 
@@ -1033,7 +1169,7 @@ function SelectEWasteScreen({ navigation }) {
     if (selectedMeta.unit === 'kg') {
       weight = Number(weightKg);
       if (!Number.isFinite(weight) || weight <= 0) {
-        Alert.alert('Invalid weight', 'Enter weight in kg for this item.');
+        setFormError('Enter weight in kg for this item.');
         return;
       }
     }
@@ -1045,7 +1181,10 @@ function SelectEWasteScreen({ navigation }) {
       unit: selectedMeta.unit,
       price: selectedMeta.price,
       quantity: qty,
-      weightKg: selectedMeta.unit === 'kg' ? weight : 0
+      weightKg: selectedMeta.unit === 'kg' ? weight : 0,
+      condition,
+      yearOfManufacturing: parseInt(yearOfManufacturing, 10) || null,
+      photoUri
     };
 
     if (editingId) {
@@ -1062,6 +1201,9 @@ function SelectEWasteScreen({ navigation }) {
     setItemName(item.name);
     setQuantity(String(item.quantity));
     setWeightKg(item.unit === 'kg' ? String(item.weightKg) : '');
+    setCondition(item.condition || 'working');
+    setYearOfManufacturing(item.yearOfManufacturing ? String(item.yearOfManufacturing) : '');
+    setPhotoUri(item.photoUri || '');
     setEditingId(item.id);
   };
 
@@ -1134,6 +1276,46 @@ function SelectEWasteScreen({ navigation }) {
           </>
         )}
 
+        <Text style={styles.label}>Condition</Text>
+        <View style={styles.chipsRow}>
+          {['working', 'partially_working', 'non_working'].map((c) => (
+            <Pressable
+              key={c}
+              style={[styles.chip, condition === c && styles.chipActive]}
+              onPress={() => setCondition(c)}
+            >
+              <Text style={[styles.chipText, condition === c && styles.chipTextActive]}>
+                {c.replace('_', ' ')}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+
+        <Text style={styles.label}>Year of Manufacturing (optional)</Text>
+        <TextInput
+          value={yearOfManufacturing}
+          onChangeText={setYearOfManufacturing}
+          keyboardType="number-pad"
+          style={styles.input}
+          placeholder="e.g. 2018"
+          placeholderTextColor="#91A79F"
+          maxLength={4}
+        />
+
+        <Text style={styles.label}>Photo (optional)</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }}>
+          <Pressable style={styles.secondaryMiniButton} onPress={pickImage}>
+            <Text style={styles.secondaryMiniButtonText}>Pick Image</Text>
+          </Pressable>
+          {photoUri ? <Text style={{ color: THEME.primaryDark, fontSize: 12 }}>Image selected</Text> : null}
+        </View>
+
+        {formError ? (
+          <View style={{ backgroundColor: '#FFE8E5', padding: 12, borderRadius: 10, marginBottom: 14 }}>
+            <Text style={{ color: '#A13A2A', fontSize: 13, fontWeight: '600' }}>{formError}</Text>
+          </View>
+        ) : null}
+
         <Pressable style={styles.primaryButton} onPress={onAddOrUpdate}>
           <Text style={styles.primaryButtonText}>{editingId ? 'Update Item' : 'Add Item'}</Text>
         </Pressable>
@@ -1187,28 +1369,45 @@ function SelectEWasteScreen({ navigation }) {
 function SchedulePickupScreen({ navigation }) {
   const { selectedItems, pickupDetails, setPickupDetails } = useApp();
   const [pickupDate, setPickupDate] = useState(pickupDetails.date || '');
-  const [pickupTime, setPickupTime] = useState(pickupDetails.time || '');
-  const [requestMode, setRequestMode] = useState(pickupDetails.mode || 'pickup');
-  const [address, setAddress] = useState(pickupDetails.address || '');
+  const [address, setAddress] = useState(pickupDetails.address || ''); // Stores the selected drop-off point
   const [phone, setPhone] = useState(pickupDetails.phone || '');
   const [notes, setNotes] = useState(pickupDetails.notes || '');
   const [activePicker, setActivePicker] = useState(null);
+  const [formError, setFormError] = useState('');
+  const [recyclers, setRecyclers] = useState([]);
+
+  React.useEffect(() => {
+    apiRequest('/recyclers')
+      .then(res => setRecyclers(res.data || []))
+      .catch(console.error);
+  }, []);
+
+  const dropoffOptions = React.useMemo(() => {
+    return recyclers.flatMap(r => {
+      const name = r.companyName || r.user?.name || 'Recycler';
+      const points = r.collectionPoints?.length ? r.collectionPoints : ['Main Facility'];
+      return points.map(pt => ({
+        label: `${name} - ${pt}`,
+        value: `${name} - ${pt}`
+      }));
+    });
+  }, [recyclers]);
 
   const onReview = () => {
+    setFormError('');
     if (!selectedItems.length) {
-      Alert.alert('No items selected', 'Add e-waste items before scheduling pickup.');
-      navigation.getParent()?.navigate('SelectEWaste');
+      setFormError('Add e-waste items before scheduling pickup.');
       return;
     }
-    if (!pickupDate || !pickupTime || !address || !phone) {
-      Alert.alert('Missing fields', 'Please fill date, time, address, and phone number.');
+    if (!pickupDate || !address || !phone) {
+      setFormError('Please select a date, drop-off point, and phone number.');
       return;
     }
 
     setPickupDetails({
       date: pickupDate,
-      time: pickupTime,
-      mode: requestMode,
+      time: '', // No specific time required for drop-off
+      mode: 'dropoff',
       address,
       phone,
       notes
@@ -1219,37 +1418,9 @@ function SchedulePickupScreen({ navigation }) {
   return (
     <ScreenShell>
       <ScrollView contentContainerStyle={styles.container}>
-        <ScreenHeader title="Schedule Pickup" subtitle="Pick a date and time for your pickup." />
+        <ScreenHeader title="Schedule Drop-off" subtitle="Pick a date and an authorized drop-off location." />
 
-        <Text style={styles.label}>Collection Mode</Text>
-        <View style={styles.modeSelectorRow}>
-          <Pressable
-            style={[styles.modeCard, requestMode === 'pickup' && styles.modeCardActive]}
-            onPress={() => setRequestMode('pickup')}
-          >
-            <MaterialCommunityIcons name="truck-outline" size={22} color={requestMode === 'pickup' ? '#FFFFFF' : THEME.primary} />
-            <Text style={[styles.modeCardTitle, requestMode === 'pickup' && styles.modeCardTitleActive]}>
-              Doorstep Pickup
-            </Text>
-            <Text style={[styles.modeCardText, requestMode === 'pickup' && styles.modeCardTextActive]}>
-              We collect e-waste from your location.
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.modeCard, requestMode === 'dropoff' && styles.modeCardActive]}
-            onPress={() => setRequestMode('dropoff')}
-          >
-            <MaterialCommunityIcons name="map-marker-check-outline" size={22} color={requestMode === 'dropoff' ? '#FFFFFF' : THEME.primary} />
-            <Text style={[styles.modeCardTitle, requestMode === 'dropoff' && styles.modeCardTitleActive]}>
-              Drop-off
-            </Text>
-            <Text style={[styles.modeCardText, requestMode === 'dropoff' && styles.modeCardTextActive]}>
-              You bring items to an authorized collection point.
-            </Text>
-          </Pressable>
-        </View>
-
-        <Text style={styles.label}>Pickup Date</Text>
+        <Text style={styles.label}>Drop-off Date</Text>
         <Pressable style={styles.pickerField} onPress={() => setActivePicker('date')}>
           <MaterialCommunityIcons name="calendar-outline" size={20} color={THEME.primary} />
           <Text style={pickupDate ? styles.pickerValue : styles.pickerPlaceholder}>
@@ -1257,23 +1428,13 @@ function SchedulePickupScreen({ navigation }) {
           </Text>
         </Pressable>
 
-        <Text style={styles.label}>Pickup Time</Text>
-        <Pressable style={styles.pickerField} onPress={() => setActivePicker('time')}>
-          <MaterialCommunityIcons name="clock-outline" size={20} color={THEME.primary} />
-          <Text style={pickupTime ? styles.pickerValue : styles.pickerPlaceholder}>
-            {pickupTime || 'Choose time'}
+        <Text style={styles.label}>Drop-off Location</Text>
+        <Pressable style={styles.pickerField} onPress={() => setActivePicker('address')}>
+          <MaterialCommunityIcons name="map-marker-check-outline" size={20} color={THEME.primary} />
+          <Text style={address ? styles.pickerValue : styles.pickerPlaceholder} numberOfLines={1}>
+            {address || 'Choose a recycler drop-off point'}
           </Text>
         </Pressable>
-
-        <Text style={styles.label}>{requestMode === 'pickup' ? 'Pickup Address' : 'Preferred Drop-off Point / Area'}</Text>
-        <TextInput
-          value={address}
-          onChangeText={setAddress}
-          style={styles.input}
-          placeholder={requestMode === 'pickup' ? 'Pickup address' : 'Collection point area or branch'}
-          placeholderTextColor="#91A79F"
-          multiline
-        />
 
         <Text style={styles.label}>Phone Number</Text>
         <TextInput
@@ -1294,6 +1455,12 @@ function SchedulePickupScreen({ navigation }) {
           placeholderTextColor="#91A79F"
           multiline
         />
+
+        {formError ? (
+          <View style={{ backgroundColor: '#FFE8E5', padding: 12, borderRadius: 10, marginBottom: 14 }}>
+            <Text style={{ color: '#A13A2A', fontSize: 13, fontWeight: '600' }}>{formError}</Text>
+          </View>
+        ) : null}
 
         <Pressable style={styles.secondaryButton} onPress={() => navigation.getParent()?.navigate('SelectEWaste')}>
           <Text style={styles.secondaryButtonText}>Edit E-Waste Items</Text>
@@ -1317,14 +1484,14 @@ function SchedulePickupScreen({ navigation }) {
         />
 
         <SelectionPickerModal
-          visible={activePicker === 'time'}
-          title="Select Pickup Time"
-          subtitle="Choose a pickup slot that works for you."
-          options={TIME_OPTIONS}
-          selectedValue={pickupTime}
+          visible={activePicker === 'address'}
+          title="Select Drop-off Location"
+          subtitle="Choose an authorized recycler drop-off point near you."
+          options={dropoffOptions}
+          selectedValue={address}
           onClose={() => setActivePicker(null)}
           onSelect={(option) => {
-            setPickupTime(option.label);
+            setAddress(option.value);
             setActivePicker(null);
           }}
         />
@@ -1334,6 +1501,7 @@ function SchedulePickupScreen({ navigation }) {
 }
 
 function OrderSummaryScreen({ navigation }) {
+  const showToast = useToast();
   const {
     user,
     selectedItems,
@@ -1343,21 +1511,25 @@ function OrderSummaryScreen({ navigation }) {
     setSelectedItems,
     setPickupDetails
   } = useApp();
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [formError, setFormError] = useState('');
 
   const total = selectedItems.reduce((sum, item) => sum + computeItemEstimate(item), 0);
 
   const onConfirm = async () => {
+    setFormError('');
     if (!selectedItems.length) {
-      Alert.alert('No items', 'Add items before confirming.');
+      setFormError('Add items before confirming.');
       return;
     }
 
     if (!user?._id) {
-      Alert.alert('Login required', 'Sign in again before confirming a pickup request.');
+      setFormError('Sign in again before confirming a pickup request.');
       return;
     }
 
     try {
+      setIsSubmitting(true);
       const response = await apiRequest('/pickups', {
         method: 'POST',
         body: JSON.stringify({
@@ -1366,6 +1538,9 @@ function OrderSummaryScreen({ navigation }) {
             category: item.category,
             name: item.name,
             quantity: item.quantity,
+            condition: item.condition,
+            yearOfManufacturing: item.yearOfManufacturing,
+            photoUri: item.photoUri,
             ...(item.unit === 'kg' ? { weightKg: item.weightKg } : {})
           })),
           schedule: {
@@ -1386,14 +1561,12 @@ function OrderSummaryScreen({ navigation }) {
       setSelectedItems([]);
       setPickupDetails({});
 
-      Alert.alert('Pickup confirmed', 'Your GreenByte request was saved to the system successfully.', [
-        {
-          text: 'Track pickup',
-          onPress: () => navigation.navigate('TrackPickup', { pickupId: newRecord.id })
-        }
-      ]);
+      showToast('Pickup request submitted! Waiting for admin approval.');
+      navigation.reset({ index: 0, routes: [{ name: 'MainTabs' }] });
     } catch (error) {
-      Alert.alert('Could not confirm pickup', error.message);
+      setFormError(error.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1420,17 +1593,27 @@ function OrderSummaryScreen({ navigation }) {
         </View>
 
         <View style={styles.listCard}>
-          <Text style={styles.cardTitle}>Pickup Details</Text>
-          <Text style={styles.pickupText}>Mode: {pickupDetails.mode === 'dropoff' ? 'Drop-off' : 'Doorstep Pickup'}</Text>
+          <Text style={styles.cardTitle}>Drop-off Details</Text>
           <Text style={styles.pickupText}>Date: {pickupDetails.date || '-'}</Text>
-          <Text style={styles.pickupText}>Time: {pickupDetails.time || '-'}</Text>
-          <Text style={styles.pickupText}>Address: {pickupDetails.address || '-'}</Text>
+          <Text style={styles.pickupText}>Location: {pickupDetails.address || '-'}</Text>
           <Text style={styles.pickupText}>Phone: {pickupDetails.phone || '-'}</Text>
           {pickupDetails.notes ? <Text style={styles.pickupText}>Notes: {pickupDetails.notes}</Text> : null}
         </View>
 
-        <Pressable style={styles.primaryButton} onPress={onConfirm}>
-          <Text style={styles.primaryButtonText}>Confirm Pickup Request</Text>
+        {formError ? (
+          <View style={{ backgroundColor: '#FFE8E5', padding: 12, borderRadius: 10, marginBottom: 14 }}>
+            <Text style={{ color: '#A13A2A', fontSize: 13, fontWeight: '600' }}>{formError}</Text>
+          </View>
+        ) : null}
+
+        <Pressable 
+          style={[styles.primaryButton, isSubmitting && styles.buttonDisabled]} 
+          onPress={onConfirm}
+          disabled={isSubmitting}
+        >
+          <Text style={styles.primaryButtonText}>
+            {isSubmitting ? 'Confirming...' : 'Confirm Pickup Request'}
+          </Text>
         </Pressable>
       </ScrollView>
     </ScreenShell>
@@ -1469,14 +1652,28 @@ function RewardsShopScreen() {
 }
 
 function RecyclerOperationsScreen() {
+  const showToast = useToast();
   const { user, setUser, pickupHistory, setPickupHistory } = useApp();
+  
+  React.useEffect(() => {
+    const fetchRecyclerQueue = async () => {
+      try {
+        const res = await apiRequest(`/recyclers/${user._id}/queue?scope=open`);
+        setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchRecyclerQueue();
+  }, [user._id, setPickupHistory]);
+
   const availabilityStatus = user.availabilityStatus || 'available';
   const openRequests = pickupHistory.filter((request) => {
     const rejectedByMe = request.recyclerDecisions?.some(
       (entry) => entry.recyclerPhone === user.phone && entry.decision === 'rejected'
     );
 
-    return request.status === 'submitted' && !request.assignedRecyclerPhone && !rejectedByMe;
+    return request.status === 'price_accepted' && !request.assignedRecyclerPhone && !rejectedByMe;
   });
 
   const assignedCount = pickupHistory.filter((request) => request.assignedRecyclerPhone === user.phone).length;
@@ -1492,53 +1689,44 @@ function RecyclerOperationsScreen() {
     setUser((prev) => ({ ...prev, availabilityStatus: next }));
   };
 
-  const onAccept = (requestId) => {
-    setPickupHistory((prev) =>
-      prev.map((request) =>
-        request.id === requestId
-          ? {
-              ...request,
-              status: 'assigned',
-              assignedRecyclerName: user.name,
-              assignedRecyclerPhone: user.phone,
-              pickupPartner: {
-                name: user.name,
-                phone: user.phone
-              },
-              recyclerDecisions: [
-                ...(request.recyclerDecisions || []),
-                {
-                  recyclerPhone: user.phone,
-                  recyclerName: user.name,
-                  decision: 'accepted',
-                  createdAt: new Date().toLocaleString()
+  const onAccept = async (requestId) => {
+    try {
+      await apiRequest(`/recyclers/${user._id}/requests/${requestId}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'accept' })
+      });
+      setPickupHistory((prev) =>
+        prev.map((request) =>
+          request.id === requestId
+            ? {
+                ...request,
+                status: 'assigned',
+                assignedRecyclerName: user.name,
+                assignedRecyclerPhone: user.phone,
+                pickupPartner: {
+                  name: user.name,
+                  phone: user.phone
                 }
-              ]
-            }
-          : request
-      )
-    );
+              }
+            : request
+        )
+      );
+      showToast('Request accepted and assigned to you.');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
   };
 
-  const onReject = (requestId) => {
-    setPickupHistory((prev) =>
-      prev.map((request) =>
-        request.id === requestId
-          ? {
-              ...request,
-              recyclerDecisions: [
-                ...(request.recyclerDecisions || []),
-                {
-                  recyclerPhone: user.phone,
-                  recyclerName: user.name,
-                  decision: 'rejected',
-                  createdAt: new Date().toLocaleString()
-                }
-              ]
-            }
-          : request
-      )
-    );
+  const onReject = async (requestId) => {
+    try {
+      await apiRequest(`/recyclers/${user._id}/requests/${requestId}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'reject' })
+      });
+      setPickupHistory((prev) => prev.filter((r) => r.id !== requestId));
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
   };
 
   return (
@@ -1578,7 +1766,7 @@ function RecyclerOperationsScreen() {
                   <View>
                     <Text style={styles.requestCardTitle}>{request.requestMode === 'dropoff' ? 'Drop-off Request' : 'Pickup Request'}</Text>
                     <Text style={styles.requestCardMeta}>
-                      {request.items.length} items | Value {request.total}
+                      {request.items.length} items | Value ₹{request.totalEstimate || 0}
                     </Text>
                   </View>
                   <View style={[styles.statusBadge, styles.statusBadgeNeutral]}>
@@ -1586,7 +1774,6 @@ function RecyclerOperationsScreen() {
                   </View>
                 </View>
                 <Text style={styles.requestDetailLine}>Date: {request.pickupDetails?.date || '-'}</Text>
-                <Text style={styles.requestDetailLine}>Time: {request.pickupDetails?.time || '-'}</Text>
                 <Text style={styles.requestDetailLine}>Location: {request.pickupDetails?.address || '-'}</Text>
                 <View style={styles.requestActionRow}>
                   <Pressable style={styles.secondaryMiniButton} onPress={() => onReject(request.id)}>
@@ -1606,33 +1793,39 @@ function RecyclerOperationsScreen() {
 }
 
 function RecyclerAssignedScreen({ navigation }) {
+  const showToast = useToast();
   const { user, pickupHistory, setPickupHistory } = useApp();
   const assignedRequests = pickupHistory.filter(
     (request) => request.assignedRecyclerPhone === user.phone && request.status !== 'rejected'
   );
 
-  const onAdvance = (requestId) => {
-    setPickupHistory((prev) =>
-      prev.map((request) => {
-        if (request.id !== requestId) {
-          return request;
-        }
+  const onAdvance = async (requestId, currentStatus) => {
+    const nextStatus =
+      currentStatus === 'assigned'
+        ? 'in_transit'
+        : currentStatus === 'in_transit'
+          ? 'collected'
+          : currentStatus === 'collected'
+            ? 'recycled'
+            : currentStatus;
 
-        const nextStatus =
-          request.status === 'assigned'
-            ? 'onTheWay'
-            : request.status === 'onTheWay'
-              ? 'arriving'
-              : request.status === 'arriving'
-                ? 'completed'
-                : request.status;
+    if (nextStatus === currentStatus) return;
 
-        return {
-          ...request,
-          status: nextStatus
-        };
-      })
-    );
+    try {
+      await apiRequest(`/recyclers/${user._id}/requests/${requestId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: nextStatus })
+      });
+      
+      setPickupHistory((prev) =>
+        prev.map((request) =>
+          request.id === requestId ? { ...request, status: nextStatus } : request
+        )
+      );
+      showToast(`Status advanced to ${nextStatus}`);
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
   };
 
   return (
@@ -1650,10 +1843,10 @@ function RecyclerAssignedScreen({ navigation }) {
             const actionText =
               request.status === 'assigned'
                 ? 'Start Route'
-                : request.status === 'onTheWay'
-                  ? 'Mark Arriving'
-                  : request.status === 'arriving'
-                    ? 'Complete Pickup'
+                : request.status === 'in_transit'
+                  ? 'Mark Collected'
+                  : request.status === 'collected'
+                    ? 'Mark Recycled'
                     : null;
 
             return (
@@ -1661,7 +1854,7 @@ function RecyclerAssignedScreen({ navigation }) {
                 <View style={styles.requestCardHeader}>
                   <View>
                     <Text style={styles.requestCardTitle}>{request.trackingId}</Text>
-                    <Text style={styles.requestCardMeta}>{request.items.length} items | {request.total}</Text>
+                    <Text style={styles.requestCardMeta}>{request.items.length} items | ₹{request.totalEstimate || 0}</Text>
                   </View>
                   <View
                     style={[
@@ -1679,7 +1872,7 @@ function RecyclerAssignedScreen({ navigation }) {
                 <Text style={styles.requestDetailLine}>Customer: {request.pickupDetails?.phone || '-'}</Text>
                 <Text style={styles.requestDetailLine}>Address: {request.pickupDetails?.address || '-'}</Text>
                 {actionText ? (
-                  <Pressable style={styles.primaryButton} onPress={() => onAdvance(request.id)}>
+                  <Pressable style={styles.primaryButton} onPress={() => onAdvance(request.id, request.status)}>
                     <Text style={styles.primaryButtonText}>{actionText}</Text>
                   </Pressable>
                 ) : (
@@ -1699,12 +1892,25 @@ function RecyclerAssignedScreen({ navigation }) {
   );
 }
 
-function AdminOverviewScreen() {
-  const { pickupHistory } = useApp();
-  const totalValue = pickupHistory.reduce((sum, request) => sum + request.total, 0);
+function AdminOverviewScreen({ navigation }) {
+  const { pickupHistory, setPickupHistory } = useApp();
+
+  React.useEffect(() => {
+    const fetchAdmin = async () => {
+      try {
+        const res = await apiRequest('/admin/requests');
+        setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    fetchAdmin();
+  }, [setPickupHistory]);
+
+  const totalValue = pickupHistory.reduce((sum, request) => sum + (request.totalEstimate || 0), 0);
   const completedCount = pickupHistory.filter((request) => request.status === 'completed').length;
   const inProgressCount = pickupHistory.filter((request) =>
-    ['assigned', 'onTheWay', 'arriving'].includes(request.status)
+    ['assigned', 'in_transit', 'collected', 'recycled'].includes(request.status)
   ).length;
 
   return (
@@ -1743,7 +1949,11 @@ function AdminOverviewScreen() {
             pickupHistory.slice(0, 5).map((request) => {
               const statusMeta = getRequestStatusMeta(request.status);
               return (
-                <View key={request.id} style={styles.adminActivityRow}>
+                <Pressable 
+                  key={request.id} 
+                  style={styles.adminActivityRow}
+                  onPress={() => navigation.getParent()?.navigate('TrackPickup', { pickupId: request.id })}
+                >
                   <View style={styles.adminActivityText}>
                     <Text style={styles.requestCardTitle}>{request.trackingId || request.id}</Text>
                     <Text style={styles.requestCardMeta}>
@@ -1766,7 +1976,7 @@ function AdminOverviewScreen() {
                   >
                     <Text style={styles.statusBadgeText}>{statusMeta.label}</Text>
                   </View>
-                </View>
+                </Pressable>
               );
             })
           )}
@@ -1801,7 +2011,7 @@ function AdminRequestsScreen({ navigation }) {
                   <View>
                     <Text style={styles.requestCardTitle}>{request.trackingId || request.id}</Text>
                     <Text style={styles.requestCardMeta}>
-                      {request.pickupDetails?.date || '-'} | {request.total}
+                      {request.pickupDetails?.date || '-'} | ₹{request.totalEstimate || 0}
                     </Text>
                   </View>
                   <View
@@ -1838,12 +2048,35 @@ function AdminRequestsScreen({ navigation }) {
 
 function TrackPickupScreen({ navigation, route }) {
   const [refreshNow, setRefreshNow] = useState(Date.now());
-  const { pickupHistory } = useApp();
+  const showToast = useToast();
+  const { user, pickupHistory, setPickupHistory } = useApp();
   const pickupId = route.params?.pickupId;
   const pickup = pickupId ? pickupHistory.find((entry) => entry.id === pickupId) : pickupHistory[0];
   const tracking = getPickupTracking(pickup, refreshNow);
   const assignedPartner = pickup?.pickupPartner || createPickupPartner(pickup?.id || Date.now());
-  const showPartnerDetails = Boolean(pickup && tracking && tracking.activeStep >= 1);
+  const ASSIGNED_STATUSES = ['assigned', 'in_transit', 'collected', 'recycled', 'paid', 'completed'];
+  const showPartnerDetails = Boolean(pickup && ASSIGNED_STATUSES.includes(pickup.status));
+  const [adminRecyclers, setAdminRecyclers] = useState([]);
+  const [showRecyclerModal, setShowRecyclerModal] = useState(false);
+
+  // Refetch the pickup data from the backend after any mutation
+  const refetchPickup = React.useCallback(async () => {
+    try {
+      if (user.role === 'admin') {
+        const res = await apiRequest('/admin/requests');
+        setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
+      } else if (user.role === 'customer' && user._id) {
+        const res = await apiRequest(`/pickups?userId=${user._id}`);
+        setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
+      } else if (user.role === 'recycler' && user._id) {
+        const res = await apiRequest(`/recyclers/${user._id}/queue?scope=open`);
+        setPickupHistory((res.data || []).map(mapBackendPickupToFrontend).filter(Boolean));
+      }
+    } catch (e) {
+      console.error('refetchPickup error', e);
+    }
+    setRefreshNow(Date.now());
+  }, [user, setPickupHistory]);
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -1852,6 +2085,23 @@ function TrackPickupScreen({ navigation, route }) {
 
     return () => clearInterval(interval);
   }, []);
+
+  React.useEffect(() => {
+    if (user.role === 'admin' && pickup?.status === 'price_accepted') {
+      apiRequest('/admin/recyclers').then(res => {
+        if (res.success && res.data) {
+          setAdminRecyclers(
+            res.data
+              .filter(r => r.user)
+              .map(r => ({
+                label: `${r.user.name} (${r.user.phone})${r.companyName ? ' – ' + r.companyName : ''}`,
+                value: r.user._id
+              }))
+          );
+        }
+      }).catch(e => console.error('Failed to load recyclers', e));
+    }
+  }, [user.role, pickup?.status]);
 
   if (!pickup || !tracking) {
     return (
@@ -1881,7 +2131,12 @@ function TrackPickupScreen({ navigation, route }) {
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader title="Track Pickup" subtitle="Follow the live journey of your e-waste pickup." />
 
-        <View style={styles.trackingSummaryCard}>
+        <View
+          style={[
+            styles.trackingSummaryCard,
+            tracking.activeStep === -1 && { backgroundColor: '#B3261E', borderColor: '#8C1D18' }
+          ]}
+        >
           <View style={styles.trackingSummaryTop}>
             <View>
               <Text style={styles.trackingCodeLabel}>Tracking ID</Text>
@@ -1897,17 +2152,19 @@ function TrackPickupScreen({ navigation, route }) {
 
           <View style={styles.trackingInfoGrid}>
             <View style={styles.trackingInfoCard}>
-              <Text style={styles.trackingInfoLabel}>Pickup slot</Text>
+              <Text style={styles.trackingInfoLabel}>Drop-off date</Text>
               <Text style={styles.trackingInfoValue}>
-                {pickup.pickupDetails?.date || '-'}{'\n'}{pickup.pickupDetails?.time || '-'}
+                {pickup.pickupDetails?.date || '-'}
               </Text>
             </View>
             <View style={styles.trackingInfoCard}>
               <Text style={styles.trackingInfoLabel}>Request mode</Text>
+              <Text style={styles.trackingInfoValue}>Drop-off</Text>
+            </View>
+            <View style={styles.trackingInfoCard}>
+              <Text style={styles.trackingInfoLabel}>Estimated value</Text>
               <Text style={styles.trackingInfoValue}>
-                {pickup.requestMode === 'dropoff' || pickup.pickupDetails?.mode === 'dropoff'
-                  ? 'Drop-off'
-                  : 'Pickup'}
+                ₹{pickup.totalEstimate || 0}
               </Text>
             </View>
           </View>
@@ -1915,7 +2172,7 @@ function TrackPickupScreen({ navigation, route }) {
           <View style={styles.trackingAddressCard}>
             <MaterialCommunityIcons name="map-marker-outline" size={20} color={THEME.primary} />
             <View style={styles.trackingAddressBody}>
-              <Text style={styles.trackingAddressLabel}>Pickup address</Text>
+              <Text style={styles.trackingAddressLabel}>Drop-off Location</Text>
               <Text style={styles.trackingAddressValue}>{pickup.pickupDetails?.address || '-'}</Text>
             </View>
           </View>
@@ -1932,6 +2189,176 @@ function TrackPickupScreen({ navigation, route }) {
             </View>
           ) : null}
         </View>
+
+        {pickup.status !== 'cancelled' && pickup.status !== 'rejected' && user.role !== 'admin' && (
+          <Pressable 
+            style={[styles.secondaryButton, { marginTop: 24, borderColor: '#FFB4A9' }]}
+            onPress={async () => {
+              const confirmed = window.confirm('Are you sure you want to cancel this pickup?');
+              if (!confirmed) return;
+              try {
+                await apiRequest(`/pickups/${pickup.id}`, { method: 'DELETE' });
+                const refreshed = pickupHistory.filter(p => p.id !== pickup.id);
+                setPickupHistory(refreshed);
+                showToast('Your pickup request has been removed.');
+                navigation.goBack();
+              } catch (e) {
+                showToast(e.message, 'error');
+              }
+            }}
+          >
+            <Text style={[styles.secondaryButtonText, { color: '#A13A2A' }]}>Cancel Pickup Request</Text>
+          </Pressable>
+        )}
+
+        {user.role === 'admin' && (
+          <Pressable 
+            style={[styles.secondaryButton, { marginTop: 24, borderColor: '#D32F2F', backgroundColor: '#FFF5F5' }]}
+            onPress={async () => {
+              const confirmed = window.confirm('This will permanently delete this request. Are you sure?');
+              if (!confirmed) return;
+              try {
+                await apiRequest(`/admin/requests/${pickup.id}`, { method: 'DELETE' });
+                const refreshed = pickupHistory.filter(p => p.id !== pickup.id);
+                setPickupHistory(refreshed);
+                showToast('Request permanently removed.');
+                navigation.goBack();
+              } catch (e) {
+                showToast(e.message, 'error');
+              }
+            }}
+          >
+            <Text style={[styles.secondaryButtonText, { color: '#D32F2F' }]}>Delete Request (Admin)</Text>
+          </Pressable>
+        )}
+
+        {user.role === 'admin' && pickup.status === 'estimated' && (
+          <View style={styles.listCard}>
+            <Text style={styles.cardTitle}>Admin Controls</Text>
+            <Pressable
+              style={styles.primaryButton}
+              onPress={async () => {
+                try {
+                  await apiRequest(`/admin/requests/${pickup.id}/approve`, {
+                    method: 'POST',
+                    body: JSON.stringify({ finalPrice: pickup.totalEstimate })
+                  });
+                  await refetchPickup();
+                  showToast('Price approved.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Approve AI Price (₹{pickup.totalEstimate})</Text>
+            </Pressable>
+            
+            <Pressable
+              style={[styles.secondaryButton, { marginTop: 12 }]}
+              onPress={async () => {
+                const priceText = Platform.OS === 'web'
+                  ? window.prompt('Enter the new proposed price in ₹:', String(pickup.totalEstimate))
+                  : await new Promise((resolve) => {
+                      Alert.prompt('Negotiate Price', 'Enter the new proposed price in ₹:', resolve, 'plain-text', String(pickup.totalEstimate));
+                    });
+                if (!priceText) return;
+                const finalPrice = parseFloat(priceText);
+                if (isNaN(finalPrice)) return showToast('Invalid price', 'error');
+                try {
+                  await apiRequest(`/admin/requests/${pickup.id}/approve`, {
+                    method: 'POST',
+                    body: JSON.stringify({ finalPrice, isNegotiation: true })
+                  });
+                  await refetchPickup();
+                  showToast('Negotiation sent to user.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={styles.secondaryButtonText}>Negotiate New Price</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {user.role === 'admin' && pickup.status === 'price_accepted' && (
+          <View style={styles.listCard}>
+            <Text style={styles.cardTitle}>Admin Assignment</Text>
+            <Text style={styles.summaryLabel}>Price is accepted. Please assign a recycler to process this request.</Text>
+            <Pressable
+              style={styles.primaryButton}
+              onPress={() => setShowRecyclerModal(true)}
+            >
+              <Text style={styles.primaryButtonText}>Assign Recycler</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {user.role === 'admin' && pickup.status === 'recycled' && (
+          <View style={styles.listCard}>
+            <Text style={styles.cardTitle}>Payment Processing</Text>
+            <Pressable
+              style={styles.primaryButton}
+              onPress={async () => {
+                try {
+                  await apiRequest(`/admin/requests/${pickup.id}/pay`, {
+                    method: 'POST',
+                    body: JSON.stringify({ adminId: user._id })
+                  });
+                  await refetchPickup();
+                  showToast('Payment processed.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Process Payment</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {user.role === 'customer' && pickup.status === 'admin_negotiated' && (
+          <View style={styles.listCard}>
+            <Text style={styles.cardTitle}>Price Negotiation</Text>
+            <Text style={styles.summaryLabel}>Admin has proposed a new price: ₹{pickup.pricing?.negotiatedAmount}</Text>
+            
+            <Pressable
+              style={[styles.primaryButton, { marginTop: 16 }]}
+              onPress={async () => {
+                try {
+                  await apiRequest(`/pickups/${pickup.id}/negotiation`, {
+                    method: 'POST',
+                    body: JSON.stringify({ userId: user._id, accept: true })
+                  });
+                  await refetchPickup();
+                  showToast('Price accepted! Your request is confirmed.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={styles.primaryButtonText}>Accept New Price</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.secondaryButton, { marginTop: 12, borderColor: '#A13A2A' }]}
+              onPress={async () => {
+                try {
+                  await apiRequest(`/pickups/${pickup.id}/negotiation`, {
+                    method: 'POST',
+                    body: JSON.stringify({ userId: user._id, accept: false })
+                  });
+                  await refetchPickup();
+                  showToast('Your request has been cancelled.');
+                } catch (e) {
+                  showToast(e.message, 'error');
+                }
+              }}
+            >
+              <Text style={[styles.secondaryButtonText, { color: '#A13A2A' }]}>Decline & Cancel Request</Text>
+            </Pressable>
+          </View>
+        )}
 
         <View style={styles.timelineCard}>
           <Text style={styles.cardTitle}>Progress Timeline</Text>
@@ -1970,7 +2397,9 @@ function TrackPickupScreen({ navigation, route }) {
                   <Text style={[styles.timelineTitle, (isActive || isComplete) && styles.timelineTitleActive]}>
                     {step.title}
                   </Text>
-                  <Text style={styles.timelineDescription}>{step.description}</Text>
+                  <Text style={styles.timelineDescription}>
+                    {step.key === 'onTheWay' ? `${step.description}\nLocation: ${pickup.pickupDetails?.address || '-'}` : step.description}
+                  </Text>
                   {isActive ? <Text style={styles.timelineTag}>Current step</Text> : null}
                 </View>
               </View>
@@ -1997,12 +2426,36 @@ function TrackPickupScreen({ navigation, route }) {
         <Pressable style={styles.secondaryButton} onPress={() => navigation.navigate('MainTabs', { screen: 'Profile' })}>
           <Text style={styles.secondaryButtonText}>View Pickup History</Text>
         </Pressable>
+
+        <SelectionPickerModal
+          visible={showRecyclerModal}
+          title="Assign Recycler"
+          subtitle="Select a recycler for this pickup request."
+          options={adminRecyclers.length ? adminRecyclers : [{ label: 'No recyclers found', value: '' }]}
+          selectedValue={null}
+          onClose={() => setShowRecyclerModal(false)}
+          onSelect={async (option) => {
+            if (!option.value) return;
+            setShowRecyclerModal(false);
+            try {
+              await apiRequest(`/admin/requests/${pickup.id}/assign`, {
+                method: 'POST',
+                body: JSON.stringify({ recyclerId: option.value, adminId: user._id })
+              });
+              await refetchPickup();
+              showToast(`Request assigned to ${option.label.split('(')[0].trim()}.`);
+            } catch (e) {
+              showToast(e.message, 'error');
+            }
+          }}
+        />
       </ScrollView>
     </ScreenShell>
   );
 }
 
 function ProfileScreen({ navigation }) {
+  const showToast = useToast();
   const { user, setUser, pickupHistory, setPickupHistory } = useApp();
   const [name, setName] = useState(user.name);
   const [phone, setPhone] = useState(user.phone);
@@ -2010,7 +2463,7 @@ function ProfileScreen({ navigation }) {
 
   const onSave = () => {
     setUser((prev) => ({ ...prev, name, phone, address }));
-    Alert.alert('Saved', 'Profile updated.');
+    showToast('Profile updated.');
   };
 
   const onLogout = () => {
@@ -2061,7 +2514,7 @@ function ProfileScreen({ navigation }) {
               >
                 <Text style={styles.historyDate}>{h.createdAt}</Text>
                 <Text style={styles.historyMeta}>
-                  {getPickupTracking(h, Date.now())?.currentStep.title} | Items: {h.items.length} | Value: {h.total}
+                  {getPickupTracking(h, Date.now())?.currentStep.title} | Items: {h.items.length} | Value: ₹{h.totalEstimate || 0}
                 </Text>
                 <Text style={styles.historyLink}>Tap to track this pickup</Text>
               </Pressable>
@@ -2143,6 +2596,19 @@ export default function App() {
   const [selectedItems, setSelectedItems] = useState([]);
   const [pickupDetails, setPickupDetails] = useState({});
   const [pickupHistory, setPickupHistory] = useState([]);
+  const [toast, setToast] = useState(null);
+  const toastTimer = React.useRef(null);
+
+  const showToast = React.useCallback((message, type = 'success') => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ message, type });
+    toastTimer.current = setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  const dismissToast = React.useCallback(() => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(null);
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -2159,21 +2625,24 @@ export default function App() {
   );
 
   return (
-    <AppContext.Provider value={contextValue}>
-      <NavigationContainer>
-        <Stack.Navigator>
-          <Stack.Screen name="Splash" component={SplashScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="OtpVerification" component={OtpVerificationScreen} options={{ headerShown: false }} />
-          <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
-          <Stack.Screen name="SelectEWaste" component={SelectEWasteScreen} options={{ title: 'Select E-Waste' }} />
-          <Stack.Screen name="TrackPickup" component={TrackPickupScreen} options={{ title: 'Track Pickup' }} />
-          <Stack.Screen name="OrderSummary" component={OrderSummaryScreen} options={{ title: 'Order Summary' }} />
-        </Stack.Navigator>
-      </NavigationContainer>
-    </AppContext.Provider>
+    <ToastContext.Provider value={showToast}>
+      <AppContext.Provider value={contextValue}>
+        <NavigationContainer>
+          <Stack.Navigator>
+            <Stack.Screen name="Splash" component={SplashScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="OtpVerification" component={OtpVerificationScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="MainTabs" component={MainTabs} options={{ headerShown: false }} />
+            <Stack.Screen name="SelectEWaste" component={SelectEWasteScreen} options={{ title: 'Select E-Waste' }} />
+            <Stack.Screen name="TrackPickup" component={TrackPickupScreen} options={{ title: 'Track Pickup' }} />
+            <Stack.Screen name="OrderSummary" component={OrderSummaryScreen} options={{ title: 'Order Summary' }} />
+          </Stack.Navigator>
+        </NavigationContainer>
+        <ToastBanner toast={toast} onDismiss={dismissToast} />
+      </AppContext.Provider>
+    </ToastContext.Provider>
   );
 }
 
@@ -2186,12 +2655,18 @@ const styles = StyleSheet.create({
     padding: 18,
     paddingTop: 24,
     flexGrow: 1,
-    paddingBottom: 32
+    paddingBottom: 32,
+    maxWidth: 600,
+    width: '100%',
+    alignSelf: 'center'
   },
   containerFlex: {
     flex: 1,
     padding: 18,
-    justifyContent: 'center'
+    justifyContent: 'center',
+    maxWidth: 600,
+    width: '100%',
+    alignSelf: 'center'
   },
   authCard: {
     backgroundColor: '#FFFFFF',
@@ -2597,15 +3072,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'rgba(8, 74, 52, 0.45)',
     justifyContent: 'center',
+    alignItems: 'center',
     padding: 18
   },
   modalCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 22,
-    padding: 18,
+    padding: 24,
     borderWidth: 1,
     borderColor: THEME.border,
-    maxHeight: '82%'
+    maxHeight: '82%',
+    width: '100%',
+    maxWidth: 420,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
+    elevation: 12
   },
   modalTitle: {
     color: THEME.text,

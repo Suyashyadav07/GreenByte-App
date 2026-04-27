@@ -4,6 +4,7 @@ const objectIdSchema = z.string().trim().regex(/^[a-f0-9]{24}$/i, 'Invalid Mongo
 const statusSchema = z.enum([
   'submitted',
   'estimated',
+  'admin_negotiated',
   'price_accepted',
   'assigned',
   'in_transit',
@@ -36,7 +37,7 @@ const createPickupSchema = estimatePickupSchema.extend({
   userId: objectIdSchema,
   schedule: z.object({
     dateLabel: z.string().trim().min(1, 'Pickup date is required'),
-    timeLabel: z.string().trim().min(1, 'Pickup time is required')
+    timeLabel: z.string().trim().optional().or(z.literal(''))
   }),
   requestMode: z.enum(['pickup', 'dropoff']).optional(),
   address: z.string().trim().min(5, 'Address is required'),

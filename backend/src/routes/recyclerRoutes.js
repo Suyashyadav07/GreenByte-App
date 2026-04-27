@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+  listProfiles,
   upsertProfile,
   getProfile,
   setAvailability,
@@ -10,6 +11,7 @@ const {
 
 const router = express.Router();
 
+router.get('/', listProfiles);
 router.get('/:recyclerId/profile', getProfile);
 router.put('/:recyclerId/profile', upsertProfile);
 router.patch('/:recyclerId/availability', setAvailability);

@@ -3,6 +3,7 @@ const CatalogItem = require('../models/CatalogItem');
 const Pickup = require('../models/Pickup');
 const User = require('../models/User');
 const { calculateImpactFromWeight, round } = require('../utils/calculatePickupMetrics');
+const { estimateWithGemini } = require('./geminiService');
 
 function appendActivity(pickup, { status, actorRole, actorId = null, note = '' }) {
   pickup.activityLog.push({
@@ -57,7 +58,10 @@ async function normalizePickupItems(items) {
       price: catalogItem.price,
       quantity: item.quantity,
       weightKg,
-      estimatedValue
+      estimatedValue,
+      condition: item.condition || '',
+      yearOfManufacturing: item.yearOfManufacturing || null,
+      photoUri: item.photoUri || ''
     });
   }
 
@@ -80,8 +84,13 @@ async function estimatePickup(items) {
   const normalizedItems = await normalizePickupItems(items);
   const totals = summarizePickupItems(normalizedItems);
 
+  const geminiResult = await estimateWithGemini(normalizedItems, totals.totalEstimate);
+
   return {
     items: normalizedItems,
+    baseEstimate: totals.totalEstimate,
+    totalEstimate: geminiResult.estimatedPrice,
+    estimationReasoning: geminiResult.reasoning,
     ...totals
   };
 }
@@ -107,12 +116,12 @@ async function createPickup(payload) {
     address: payload.address,
     phone: payload.phone,
     notes: payload.notes || '',
-    status: 'submitted',
+    status: 'estimated',
     pricing: {
       estimatedAmount: estimate.totalEstimate,
       acceptedByUser: payload.acceptEstimatedPrice !== false,
       acceptedAt: new Date(),
-      estimationSource: 'rule-based-v1'
+      estimationSource: 'gemini-api'
     },
     totalEstimate: estimate.totalEstimate,
     totalWeightKg: estimate.totalWeightKg,
@@ -125,10 +134,10 @@ async function createPickup(payload) {
   });
 
   appendActivity(pickup, {
-    status: 'submitted',
+    status: 'estimated',
     actorRole: 'customer',
     actorId: user._id,
-    note: 'Pickup request created by customer'
+    note: `Pickup request created. Pending admin approval. (Gemini: ${estimate.estimationReasoning})`
   });
 
   await pickup.save();
@@ -270,20 +279,14 @@ async function advanceRecyclerRequest(recyclerId, pickupId, status, note = '') {
     throw new ApiError(403, 'This request is not assigned to the provided recycler');
   }
 
-  pickup.status = status;
-
-  if (status === 'paid') {
-    pickup.payment.status = 'paid';
-    pickup.payment.paidAt = new Date();
-  } else if (status === 'recycled' && pickup.payment.status === 'pending') {
-    pickup.payment.status = 'processing';
+  if (['paid', 'completed'].includes(status)) {
+    throw new ApiError(403, 'Recyclers cannot mark requests as paid or completed. Only Admins can issue payments.');
   }
 
-  if ((status === 'completed' || status === 'paid') && !pickup.coinsCreditedAt) {
-    await User.findByIdAndUpdate(pickup.user, {
-      $inc: { coinsBalance: pickup.impact.coinsEarned }
-    });
-    pickup.coinsCreditedAt = new Date();
+  pickup.status = status;
+
+  if (status === 'recycled' && pickup.payment.status === 'pending') {
+    pickup.payment.status = 'processing';
   }
 
   appendActivity(pickup, {
@@ -315,6 +318,150 @@ async function listAllRequests(filters = {}) {
     .lean();
 }
 
+async function adminAcceptPrice(pickupId, finalPrice, note = '', isNegotiation = false) {
+  const pickup = await Pickup.findById(pickupId);
+  if (!pickup) throw new ApiError(404, 'Pickup not found');
+
+  if (isNegotiation) {
+    pickup.pricing.negotiatedAmount = finalPrice;
+    pickup.status = 'admin_negotiated';
+    appendActivity(pickup, {
+      status: 'admin_negotiated',
+      actorRole: 'admin',
+      note: note || `Admin proposed a negotiated price of ₹${finalPrice}`
+    });
+  } else {
+    pickup.totalEstimate = finalPrice;
+    pickup.pricing.estimatedAmount = finalPrice;
+    pickup.status = 'price_accepted';
+    appendActivity(pickup, {
+      status: 'price_accepted',
+      actorRole: 'admin',
+      note: note || `Admin scrutinized and approved the price at ₹${finalPrice}`
+    });
+  }
+
+  await pickup.save();
+  return pickup;
+}
+
+async function customerRespondNegotiation(pickupId, userId, accept) {
+  const pickup = await Pickup.findOne({ _id: pickupId, user: userId });
+  if (!pickup) throw new ApiError(404, 'Pickup not found');
+
+  if (pickup.status !== 'admin_negotiated') {
+    throw new ApiError(400, 'Pickup is not in negotiation state');
+  }
+
+  if (accept) {
+    pickup.totalEstimate = pickup.pricing.negotiatedAmount;
+    pickup.status = 'price_accepted';
+    appendActivity(pickup, {
+      status: 'price_accepted',
+      actorRole: 'customer',
+      actorId: userId,
+      note: 'Customer accepted the negotiated price'
+    });
+  } else {
+    pickup.status = 'cancelled';
+    appendActivity(pickup, {
+      status: 'cancelled',
+      actorRole: 'customer',
+      actorId: userId,
+      note: 'Customer rejected the negotiated price and cancelled'
+    });
+  }
+
+  await pickup.save();
+  return pickup;
+}
+
+async function adminPayPickup(pickupId, adminId, note = '') {
+  const pickup = await Pickup.findById(pickupId);
+  if (!pickup) throw new ApiError(404, 'Pickup not found');
+
+  if (pickup.status !== 'recycled') {
+    throw new ApiError(400, 'Pickup must be recycled before payment can be issued');
+  }
+
+  pickup.status = 'paid';
+  pickup.payment.status = 'paid';
+  pickup.payment.paidAt = new Date();
+
+  if (!pickup.coinsCreditedAt) {
+    await User.findByIdAndUpdate(pickup.user, {
+      $inc: { coinsBalance: pickup.impact.coinsEarned }
+    });
+    pickup.coinsCreditedAt = new Date();
+  }
+
+  appendActivity(pickup, {
+    status: 'paid',
+    actorRole: 'admin',
+    actorId: adminId,
+    note: note || 'Admin processed the payment and completed the pickup'
+  });
+
+  await pickup.save();
+  return pickup;
+}
+
+async function adminAssignRecycler(pickupId, adminId, recyclerId, note = '') {
+  const [pickup, recycler] = await Promise.all([
+    Pickup.findById(pickupId),
+    User.findById(recyclerId)
+  ]);
+
+  if (!pickup) throw new ApiError(404, 'Pickup not found');
+  if (!recycler || recycler.role !== 'recycler') throw new ApiError(404, 'Recycler not found');
+
+  if (!['submitted', 'estimated', 'price_accepted'].includes(pickup.status)) {
+    throw new ApiError(400, 'Pickup is not in an assignable state');
+  }
+
+  pickup.status = 'assigned';
+  pickup.recyclerAssignment = {
+    recycler: recycler._id,
+    recyclerName: recycler.name,
+    recyclerPhone: recycler.phone,
+    assignedAt: new Date()
+  };
+
+  appendActivity(pickup, {
+    status: 'assigned',
+    actorRole: 'admin',
+    actorId: adminId,
+    note: note || `Admin manually assigned request to recycler: ${recycler.name}`
+  });
+
+  await pickup.save();
+  return pickup;
+}
+
+async function removePickup(pickupId) {
+  const pickup = await Pickup.findById(pickupId);
+  if (!pickup) {
+    throw new ApiError(404, 'Pickup not found');
+  }
+  
+  if (['completed', 'paid'].includes(pickup.status)) {
+    throw new ApiError(400, 'Cannot delete a completed pickup');
+  }
+
+  await Pickup.findByIdAndDelete(pickupId);
+  return { success: true };
+}
+
+async function adminForceDeletePickup(pickupId) {
+  const pickup = await Pickup.findById(pickupId);
+  if (!pickup) {
+    throw new ApiError(404, 'Pickup not found');
+  }
+
+  await Pickup.findByIdAndDelete(pickupId);
+  return { success: true };
+}
+
 module.exports = {
   estimatePickup,
   createPickup,
@@ -323,5 +470,11 @@ module.exports = {
   listRecyclerQueue,
   decideRecyclerRequest,
   advanceRecyclerRequest,
-  listAllRequests
+  listAllRequests,
+  adminAcceptPrice,
+  removePickup,
+  customerRespondNegotiation,
+  adminPayPickup,
+  adminAssignRecycler,
+  adminForceDeletePickup
 };

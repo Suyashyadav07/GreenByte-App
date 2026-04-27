@@ -1,6 +1,7 @@
 const ApiError = require('../utils/apiError');
 const User = require('../models/User');
 const RecyclerProfile = require('../models/RecyclerProfile');
+const bcrypt = require('bcryptjs');
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -14,9 +15,19 @@ async function registerUser(payload) {
     throw new ApiError(409, 'A user with this phone number already exists');
   }
 
+  if ((payload.role === 'recycler' || payload.role === 'admin') && !payload.password) {
+    throw new ApiError(400, `Password is required for ${payload.role} registration`);
+  }
+
+  let hashedPassword = '';
+  if (payload.password) {
+    hashedPassword = await bcrypt.hash(payload.password, 10);
+  }
+
   const user = await User.create({
     name: payload.name,
     phone: normalizedPhone,
+    password: hashedPassword,
     role: payload.role,
     email: payload.email || '',
     address: payload.address || '',
@@ -36,7 +47,7 @@ async function registerUser(payload) {
   return user;
 }
 
-async function loginWithPhone({ phone, role }) {
+async function loginWithPhone({ phone, role, password }) {
   const normalizedPhone = phone.replace(/\D/g, '');
   const user = await User.findOne({ phone: normalizedPhone, role });
 
@@ -44,6 +55,24 @@ async function loginWithPhone({ phone, role }) {
     throw new ApiError(404, `No ${role} account found for this phone number`);
   }
 
+  // All roles can login with password if one is provided and set
+  if (password && user.password) {
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      throw new ApiError(401, 'Invalid password');
+    }
+    return user;
+  }
+
+  // Admin and recycler MUST use password
+  if (role === 'admin' || role === 'recycler') {
+    if (!password) {
+      throw new ApiError(400, 'Password is required to login');
+    }
+    throw new ApiError(401, 'Invalid password');
+  }
+
+  // Customer without password — allow through (will use OTP on frontend)
   return user;
 }
 

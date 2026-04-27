@@ -14,13 +14,21 @@ const {
 const {
   upsertRecyclerProfile,
   getRecyclerProfile,
-  updateRecyclerAvailability
+  updateRecyclerAvailability,
+  listRecyclerProfiles
 } = require('../services/recyclerService');
 const {
   listRecyclerQueue,
   decideRecyclerRequest,
   advanceRecyclerRequest
 } = require('../services/pickupService');
+const listProfiles = asyncHandler(async (req, res) => {
+  const profiles = await listRecyclerProfiles();
+  res.json({
+    success: true,
+    data: profiles
+  });
+});
 
 const upsertProfile = asyncHandler(async (req, res) => {
   const { recyclerId } = validate(recyclerProfileParamsSchema, req.params);
@@ -88,6 +96,7 @@ const advanceRequest = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  listProfiles,
   upsertProfile,
   getProfile,
   setAvailability,

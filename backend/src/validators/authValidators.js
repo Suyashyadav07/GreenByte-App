@@ -13,6 +13,7 @@ const roleSchema = z.enum(['customer', 'recycler', 'admin']);
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
   phone: phoneSchema,
+  password: z.string().min(6).optional(),
   role: roleSchema.default('customer'),
   email: z.string().trim().email().optional(),
   address: z.string().trim().max(300).optional(),
@@ -21,6 +22,7 @@ const registerSchema = z.object({
 
 const loginSchema = z.object({
   phone: phoneSchema,
+  password: z.string().min(6).optional(),
   role: roleSchema.default('customer')
 });
 
