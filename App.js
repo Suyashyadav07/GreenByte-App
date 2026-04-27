@@ -1530,39 +1530,35 @@ function OrderSummaryScreen({ navigation }) {
 
   const total = selectedItems.reduce((sum, item) => sum + computeItemEstimate(item), 0);
 
-  React.useEffect(() => {
-    let isMounted = true;
-    
-    const getAiEstimate = async () => {
-      try {
-        setIsEstimating(true);
-        const response = await apiRequest('/pickups/estimate', {
-          method: 'POST',
-          body: JSON.stringify({
-            items: selectedItems.map((item) => ({
-              category: item.category,
-              name: item.name,
-              quantity: item.quantity,
-              condition: item.condition,
-              yearOfManufacturing: item.yearOfManufacturing,
-              ...(item.unit === 'kg' ? { weightKg: item.weightKg } : {})
-            }))
-          })
-        });
-        
-        if (isMounted) {
-          setAiResult(response.data);
-        }
-      } catch (error) {
-        console.error('Estimation error:', error);
-      } finally {
-        if (isMounted) setIsEstimating(false);
-      }
-    };
-
-    getAiEstimate();
-    return () => { isMounted = false; };
+  const getAiEstimate = React.useCallback(async () => {
+    try {
+      setIsEstimating(true);
+      setAiResult(null);
+      const response = await apiRequest('/pickups/estimate', {
+        method: 'POST',
+        body: JSON.stringify({
+          items: selectedItems.map((item) => ({
+            category: item.category,
+            name: item.name,
+            quantity: item.quantity,
+            condition: item.condition,
+            yearOfManufacturing: item.yearOfManufacturing,
+            ...(item.unit === 'kg' ? { weightKg: item.weightKg } : {})
+          }))
+        })
+      });
+      
+      setAiResult(response.data);
+    } catch (error) {
+      console.error('Estimation error:', error);
+    } finally {
+      setIsEstimating(false);
+    }
   }, [selectedItems]);
+
+  React.useEffect(() => {
+    getAiEstimate();
+  }, [getAiEstimate]);
 
   const onConfirm = async () => {
     setFormError('');
@@ -1663,6 +1659,21 @@ function OrderSummaryScreen({ navigation }) {
                   "{aiResult.estimationReasoning}"
                 </Text>
               </View>
+            ) : null}
+
+            {aiResult.estimationReasoning?.includes('Fallback') || aiResult.estimationReasoning?.includes('error') ? (
+              <Pressable 
+                style={{ 
+                  marginTop: 12, 
+                  backgroundColor: THEME.primary, 
+                  padding: 8, 
+                  borderRadius: 6, 
+                  alignItems: 'center' 
+                }} 
+                onPress={getAiEstimate}
+              >
+                <Text style={{ color: '#FFF', fontWeight: '600', fontSize: 12 }}>Retry AI Estimation</Text>
+              </Pressable>
             ) : null}
           </View>
         ) : null}
