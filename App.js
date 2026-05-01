@@ -566,20 +566,48 @@ function ScreenHeader({ title, subtitle, centered = false, compact = false, titl
     <View style={[styles.screenHeader, centered && styles.screenHeaderCentered, compact && styles.screenHeaderCompact]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: centered ? 'center' : 'space-between', width: '100%' }}>
         <Text style={[styles.sectionTitle, centered && styles.sectionTitleCentered, headerTitleStyle]}>{title}</Text>
-        <Pressable 
-          onPress={toggleDarkMode}
-          style={({ pressed }) => ({
-            padding: 8,
-            borderRadius: 20,
-            backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
-          })}
-        >
-          <MaterialCommunityIcons 
-            name={isDarkMode ? 'weather-sunny' : 'weather-night'} 
-            size={24} 
-            color={iconColor} 
-          />
-        </Pressable>
+        
+        <View style={centered ? { position: 'absolute', right: 0 } : {}}>
+          <Pressable 
+            onPress={toggleDarkMode}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+              paddingHorizontal: 8,
+              paddingVertical: 4,
+              borderRadius: 20,
+              opacity: pressed ? 0.7 : 1,
+              marginRight: -4
+            })}
+          >
+            <Text style={{ 
+              fontSize: 10, 
+              color: isDarkMode ? '#20C997' : theme.muted, 
+              marginRight: 6, 
+              fontWeight: '700',
+              textTransform: 'uppercase'
+            }}>
+              {isDarkMode ? 'Dark' : 'Light'}
+            </Text>
+            <View style={{ 
+              width: 36, 
+              height: 20, 
+              backgroundColor: isDarkMode ? (titleStyle?.color === '#FFFFFF' ? '#20C997' : theme.primary) : '#DDD', 
+              borderRadius: 10,
+              justifyContent: 'center',
+              paddingHorizontal: 2
+            }}>
+              <View style={{ 
+                width: 14, 
+                height: 14, 
+                backgroundColor: '#FFF', 
+                borderRadius: 7,
+                transform: [{ translateX: isDarkMode ? 16 : 0 }]
+              }} />
+            </View>
+          </Pressable>
+        </View>
       </View>
       {subtitle ? <Text style={[styles.sectionSubtitle, centered && styles.sectionSubtitleCentered, headerSubtitleStyle]}>{subtitle}</Text> : null}
     </View>
@@ -894,7 +922,7 @@ function LoginScreen({ navigation, route }) {
   const showToast = useToast();
   const prefilledPhone = route.params?.phone || '';
   const prefilledRole = route.params?.role || 'customer';
-  const { setUser, setPickupHistory, isDarkMode } = useApp();
+  const { setUser, setPickupHistory, isDarkMode, toggleDarkMode } = useApp();
   const theme = useTheme();
 
   const [phone, setPhone] = useState(prefilledPhone);
@@ -941,11 +969,11 @@ function LoginScreen({ navigation, route }) {
     <ScreenShell isLoginScreen={true}>
       <View style={styles.containerFlex}>
         {/* Standardized Emerald Glass Cards with 85% Opacity */}
-        <View style={{ marginBottom: 20, alignItems: 'center', backgroundColor: 'rgba(5, 31, 26, 0.85)', padding: 20, borderRadius: 24, borderBottomWidth: 2, borderBottomColor: '#20C997', width: '100%' }}>
-          <Text style={{ fontSize: 38, color: '#FFFFFF', fontFamily: 'Outfit-Black', textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 15 }}>
+        <View style={{ marginBottom: 20, alignItems: 'center', backgroundColor: 'rgba(5, 31, 26, 0.85)', padding: 22, borderRadius: 24, borderBottomWidth: 2, borderBottomColor: '#20C997', width: '100%' }}>
+          <Text style={{ fontSize: 36, color: '#FFFFFF', fontFamily: 'Outfit-Black', textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 15, textAlign: 'center' }}>
             Welcome to GreenByte
           </Text>
-          <Text style={{ color: '#20C997', fontSize: 16, fontFamily: 'Outfit-Bold', letterSpacing: 3, marginTop: 8, textTransform: 'uppercase' }}>
+          <Text style={{ color: '#20C997', fontSize: 14, fontFamily: 'Outfit-Bold', letterSpacing: 2.5, marginTop: 10, textTransform: 'uppercase', textAlign: 'center' }}>
             Powered by Pruthvi Zero Waste Foundation
           </Text>
         </View>
@@ -1170,7 +1198,7 @@ function OtpVerificationScreen({ navigation, route }) {
 
 function HomeScreen({ navigation }) {
   const [refreshNow, setRefreshNow] = useState(Date.now());
-  const { pickupHistory, user, isDarkMode } = useApp();
+  const { pickupHistory, user, isDarkMode, toggleDarkMode } = useApp();
   const theme = useTheme();
   const latestPickup = pickupHistory[0];
   const tracking = getPickupTracking(latestPickup, refreshNow);
@@ -1216,6 +1244,46 @@ function HomeScreen({ navigation }) {
               colors={['transparent', isDarkMode ? 'rgba(5, 31, 26, 0.95)' : 'rgba(255, 255, 255, 0.95)']}
               style={{ padding: 22, paddingTop: 60 }}
             >
+              <View style={{ position: 'absolute', top: 16, right: 16 }}>
+                <Pressable 
+                  onPress={toggleDarkMode}
+                  style={({ pressed }) => ({
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: isDarkMode ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.08)',
+                    paddingHorizontal: 12,
+                    paddingVertical: 8,
+                    borderRadius: 24,
+                    gap: 10,
+                    borderWidth: 1,
+                    borderColor: isDarkMode ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.1)',
+                    opacity: pressed ? 0.7 : 1
+                  })}
+                >
+                  <MaterialCommunityIcons 
+                    name={isDarkMode ? 'weather-night' : 'weather-sunny'} 
+                    size={20} 
+                    color={isDarkMode ? '#FFD700' : '#FF8C00'} 
+                  />
+                  <View style={{ 
+                    width: 36, 
+                    height: 20, 
+                    backgroundColor: isDarkMode ? theme.primary : '#CCC', 
+                    borderRadius: 10,
+                    justifyContent: 'center',
+                    paddingHorizontal: 2
+                  }}>
+                    <View style={{ 
+                      width: 16, 
+                      height: 16, 
+                      backgroundColor: '#FFF', 
+                      borderRadius: 8,
+                      transform: [{ translateX: isDarkMode ? 16 : 0 }]
+                    }} />
+                  </View>
+                </Pressable>
+              </View>
+
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 }}>
                 <View style={[styles.homeLogoBadge, { width: 44, height: 44, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
                   <MaterialCommunityIcons name="leaf" size={24} color={theme.primary} />
@@ -1332,12 +1400,36 @@ function SelectEWasteScreen({ navigation }) {
       base64: true,
     });
 
+    handleImageResult(result);
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      setFormError('Camera permission is required to take photos.');
+      return;
+    }
+
+    let result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.4,
+      base64: true,
+    });
+
+    handleImageResult(result);
+  };
+
+  const handleImageResult = (result) => {
     if (!result.canceled) {
       const asset = result.assets[0];
+      // On web/mobile, we prioritize base64 for database storage
       if (asset.base64) {
-        setPhotoUri(`data:image/jpeg;base64,${asset.base64}`);
-        console.log('Image captured as base64');
+        const dataUri = `data:image/jpeg;base64,${asset.base64}`;
+        setPhotoUri(dataUri);
+        console.log('Image captured and converted to base64 string (Length:', dataUri.length, ')');
       } else {
+        // Fallback for native or if base64 missing
         setPhotoUri(asset.uri);
         console.log('Image captured as URI:', asset.uri);
       }
@@ -1506,10 +1598,17 @@ function SelectEWasteScreen({ navigation }) {
           maxLength={4}
         />
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
           <Pressable style={[styles.secondaryMiniButton, isDarkMode && { backgroundColor: 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.2)' }]} onPress={pickImage}>
-            <Text style={[styles.secondaryMiniButtonText, isDarkMode && { color: theme.text }]}>Pick Image</Text>
+            <MaterialCommunityIcons name="image-plus" size={16} color={isDarkMode ? theme.text : theme.primary} style={{ marginRight: 6 }} />
+            <Text style={[styles.secondaryMiniButtonText, isDarkMode && { color: theme.text }]}>Gallery</Text>
           </Pressable>
+
+          <Pressable style={[styles.secondaryMiniButton, isDarkMode && { backgroundColor: 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.2)' }]} onPress={takePhoto}>
+            <MaterialCommunityIcons name="camera" size={16} color={isDarkMode ? theme.text : theme.primary} style={{ marginRight: 6 }} />
+            <Text style={[styles.secondaryMiniButtonText, isDarkMode && { color: theme.text }]}>Camera</Text>
+          </Pressable>
+
           {photoUri ? (
             <View style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: theme.primary }}>
               <Image source={{ uri: photoUri }} style={{ width: '100%', height: '100%' }} />
@@ -2095,6 +2194,19 @@ function RecyclerOperationsScreen({ navigation }) {
                     </View>
                   </View>
                   <Text style={[styles.requestDetailLine, { color: theme.text }]}>Location: {request.pickupDetails?.address || '-'}</Text>
+                  {request.status === 'price_accepted' && (
+                    <View style={[styles.requestActionRow, { marginTop: 12 }]}>
+                      <Pressable 
+                        style={[styles.secondaryMiniButton, isDarkMode && { backgroundColor: 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.2)' }]} 
+                        onPress={() => onReject(request.id)}
+                      >
+                        <Text style={[styles.secondaryMiniButtonText, isDarkMode && { color: theme.text }]}>Reject</Text>
+                      </Pressable>
+                      <Pressable style={styles.primaryMiniButton} onPress={() => onAccept(request.id)}>
+                        <Text style={styles.primaryMiniButtonText}>Accept</Text>
+                      </Pressable>
+                    </View>
+                  )}
                 </Pressable>
               );
             })}
@@ -2177,6 +2289,48 @@ function RecyclerAssignedScreen({ navigation }) {
     }
   };
 
+  const onAccept = async (requestId) => {
+    try {
+      await apiRequest(`/recyclers/${user._id}/requests/${requestId}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'accept' })
+      });
+      setPickupHistory((prev) =>
+        prev.map((request) =>
+          request.id === requestId
+            ? {
+                ...request,
+                status: 'assigned',
+                assignedRecyclerName: user.name,
+                assignedRecyclerPhone: user.phone,
+                assignedRecyclerId: user._id,
+                pickupPartner: {
+                  name: user.name,
+                  phone: user.phone
+                }
+              }
+            : request
+        )
+      );
+      showToast('Request accepted and assigned to you.');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const onReject = async (requestId) => {
+    try {
+      await apiRequest(`/recyclers/${user._id}/requests/${requestId}/decision`, {
+        method: 'POST',
+        body: JSON.stringify({ decision: 'reject' })
+      });
+      setPickupHistory((prev) => prev.filter((r) => r.id !== requestId));
+      showToast('Request rejected.');
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  };
+
   return (
     <ScreenShell>
       <ScrollView contentContainerStyle={styles.container}>
@@ -2188,7 +2342,7 @@ function RecyclerAssignedScreen({ navigation }) {
           </View>
         ) : (
           assignedRequests.map((request) => {
-            const statusMeta = getRequestStatusMeta(request.status);
+            const statusMeta = REQUEST_STATUS_META[request.status] || { label: 'Assigned', tone: 'active' };
             const actionText = getButtonLabel(request.status);
 
             return (
@@ -2213,7 +2367,20 @@ function RecyclerAssignedScreen({ navigation }) {
                 </View>
                 <Text style={[styles.requestDetailLine, { color: theme.text }]}>Customer: {request.customerName} ({request.pickupDetails?.phone || '-'})</Text>
                 <Text style={[styles.requestDetailLine, { color: theme.text }]}>Address: {request.pickupDetails?.address || '-'}</Text>
-                {actionText ? (
+                
+                {request.status === 'price_accepted' ? (
+                  <View style={[styles.requestActionRow, { marginTop: 12 }]}>
+                    <Pressable 
+                      style={[styles.secondaryMiniButton, isDarkMode && { backgroundColor: 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.2)' }]} 
+                      onPress={() => onReject(request.id)}
+                    >
+                      <Text style={[styles.secondaryMiniButtonText, isDarkMode && { color: theme.text }]}>Reject</Text>
+                    </Pressable>
+                    <Pressable style={styles.primaryMiniButton} onPress={() => onAccept(request.id)}>
+                      <Text style={styles.primaryMiniButtonText}>Accept</Text>
+                    </Pressable>
+                  </View>
+                ) : actionText ? (
                   <Pressable style={styles.primaryButton} onPress={() => onAdvance(request.id, request.status)}>
                     <Text style={styles.primaryButtonText}>{actionText}</Text>
                   </Pressable>
@@ -3073,7 +3240,7 @@ function MainTabs() {
 }
 
 function FloatingHeader({ title, navigation }) {
-  const { isDarkMode } = useApp() || { isDarkMode: false };
+  const { isDarkMode, toggleDarkMode } = useApp() || { isDarkMode: false };
   const theme = useTheme();
   
   return (
@@ -3101,21 +3268,61 @@ function FloatingHeader({ title, navigation }) {
           overflow: 'hidden'
         }}
       >
-        <Pressable
-          onPress={() => navigation.goBack()}
-          style={({ pressed }) => ({
-            width: 42,
-            height: 42,
-            borderRadius: 14,
-            backgroundColor: pressed ? 'rgba(0,0,0,0.05)' : 'transparent',
-            alignItems: 'center',
-            justifyContent: 'center'
-          })}
-        >
-          <MaterialCommunityIcons name="arrow-left" size={24} color={theme.text} />
-        </Pressable>
-        <Text style={{ marginLeft: 10, fontSize: 18, fontWeight: '800', color: theme.text }}>{title}</Text>
-        <View style={{ width: 8 }} /> 
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          <Pressable
+            onPress={() => navigation.goBack()}
+            style={({ pressed }) => ({
+              width: 38,
+              height: 38,
+              borderRadius: 12,
+              backgroundColor: pressed ? 'rgba(0,0,0,0.05)' : 'transparent',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 8
+            })}
+          >
+            <MaterialCommunityIcons name="arrow-left" size={24} color={theme.text} />
+          </Pressable>
+          <Text style={{ flex: 1, fontSize: 16, fontWeight: '700', color: theme.text }} numberOfLines={1}>
+            {title}
+          </Text>
+          
+          <Pressable 
+            onPress={toggleDarkMode}
+            style={({ pressed }) => ({
+              flexDirection: 'row',
+              alignItems: 'center',
+              backgroundColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+              paddingHorizontal: 10,
+              paddingVertical: 6,
+              borderRadius: 20,
+              gap: 8,
+              opacity: pressed ? 0.8 : 1
+            })}
+          >
+            <MaterialCommunityIcons 
+              name={isDarkMode ? 'weather-night' : 'weather-sunny'} 
+              size={18} 
+              color={isDarkMode ? '#FFD700' : '#FF8C00'} 
+            />
+            <View style={{ 
+              width: 32, 
+              height: 18, 
+              backgroundColor: isDarkMode ? theme.primary : '#DDD', 
+              borderRadius: 10,
+              justifyContent: 'center',
+              paddingHorizontal: 2
+            }}>
+              <View style={{ 
+                width: 14, 
+                height: 14, 
+                backgroundColor: '#FFF', 
+                borderRadius: 7,
+                transform: [{ translateX: isDarkMode ? 14 : 0 }]
+              }} />
+            </View>
+          </Pressable>
+        </View>
       </BlurView>
     </View>
   );
@@ -3800,7 +4007,9 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.primary,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 10
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   primaryMiniButtonText: {
     color: '#FFFFFF',
@@ -3813,7 +4022,9 @@ const styles = StyleSheet.create({
     borderColor: THEME.border,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    borderRadius: 10
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   secondaryMiniButtonText: {
     color: THEME.primaryDark,

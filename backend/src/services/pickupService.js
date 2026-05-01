@@ -110,7 +110,10 @@ async function createPickup(payload) {
 
   const pickup = new Pickup({
     user: payload.userId,
-    items: estimate.items,
+    items: estimate.items.map((item, idx) => ({
+      ...item,
+      photoUri: payload.items[idx]?.photoUri || ''
+    })),
     schedule: payload.schedule,
     requestMode: payload.requestMode || 'pickup',
     address: payload.address,
