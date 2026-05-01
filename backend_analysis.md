@@ -6,7 +6,7 @@ This document provides a detailed overview of the backend architecture, database
 
 GreenByte follows a modern, decoupled architecture with a focus on scalability and real-time interactions.
 
-![GreenByte Architecture](/home/harshbamane/.gemini/antigravity/brain/04713f4d-cedd-4662-a816-313dd2b5fd24/greenbyte_architecture_diagram_v2_1777604446992.png)
+![GreenByte Architecture](./greenbyte_architecture_diagram_v2_1777604446992.png)
 
 ### Key Components
 - **Frontend**: React Native (Expo) for mobile and React for web.
@@ -21,7 +21,7 @@ GreenByte follows a modern, decoupled architecture with a focus on scalability a
 
 To better understand how the system works, here is the end-to-end data flow for a typical **Pickup Request**.
 
-![Pickup Data Flow](/home/harshbamane/.gemini/antigravity/brain/04713f4d-cedd-4662-a816-313dd2b5fd24/greenbyte_pickup_flow_diagram_1777604470046.png)
+![Pickup Data Flow](./greenbyte_pickup_flow_diagram_1777604470046.png)
 
 ### Step-by-Step Data Journey
 
