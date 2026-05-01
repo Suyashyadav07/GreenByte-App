@@ -2,13 +2,12 @@ import firebase from 'firebase/compat/app';
 import 'firebase/compat/auth';
 
 const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID
+  apiKey: "AIzaSyDtfCAazTf_YIsD9WP1mzVR-AWfzaBBd94",
+  authDomain: "greenbyte-998d0.firebaseapp.com",
+  projectId: "greenbyte-998d0",
+  storageBucket: "greenbyte-998d0.firebasestorage.app",
+  messagingSenderId: "6616212059",
+  appId: "1:6616212059:web:5f38a3ac143b3eaa24157e"
 };
 
 const missingKeys = Object.entries(firebaseConfig)
