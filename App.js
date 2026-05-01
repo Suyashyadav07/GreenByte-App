@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useMemo, useRef, useState, useEffect } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,9 @@ import {
   Image,
   ImageBackground
 } from 'react-native';
+import { useFonts, Outfit_400Regular, Outfit_600SemiBold, Outfit_700Bold, Outfit_900Black } from '@expo-google-fonts/outfit';
+import * as ExpoSplashScreen from 'expo-splash-screen';
+
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 // Firebase reCAPTCHA removed
@@ -25,6 +28,9 @@ import { firebase, firebaseAuth, firebaseConfig } from './firebaseClient';
 
 import { BlurView } from 'expo-blur';
 import { BackgroundShapes } from './src/components/BackgroundShapes';
+
+// Keep the splash screen visible while we fetch resources
+ExpoSplashScreen.preventAutoHideAsync().catch(() => {});
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -480,13 +486,13 @@ async function apiRequest(path, options = {}) {
   return data;
 }
 
-function ScreenShell({ children }) {
+function ScreenShell({ children, isLoginScreen = false }) {
   const { isDarkMode } = useApp();
   const bgColors = isDarkMode ? ['#051F1A', '#0B2E26'] : ['#EFFAF4', '#F8FDFA'];
 
   return (
     <LinearGradient colors={bgColors} style={[styles.shell, isDarkMode && { backgroundColor: '#0B2E26' }]}>
-      <BackgroundShapes isDarkMode={isDarkMode} />
+      <BackgroundShapes isDarkMode={isDarkMode} isLoginScreen={isLoginScreen} />
       <StatusBar style={isDarkMode ? 'light' : 'dark'} />
       {children}
     </LinearGradient>
@@ -548,30 +554,34 @@ function ToastBanner({ toast, onDismiss }) {
   );
 }
 
-function ScreenHeader({ title, subtitle, centered = false, compact = false }) {
+function ScreenHeader({ title, subtitle, centered = false, compact = false, titleStyle, subtitleStyle }) {
   const { isDarkMode, toggleDarkMode } = useApp();
   const theme = useTheme();
+
+  const headerTitleStyle = titleStyle || { color: theme.text };
+  const headerSubtitleStyle = subtitleStyle || { color: theme.muted };
+  const iconColor = titleStyle?.color || theme.primary;
 
   return (
     <View style={[styles.screenHeader, centered && styles.screenHeaderCentered, compact && styles.screenHeaderCompact]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: centered ? 'center' : 'space-between', width: '100%' }}>
-        <Text style={[styles.sectionTitle, centered && styles.sectionTitleCentered, { color: theme.text }]}>{title}</Text>
+        <Text style={[styles.sectionTitle, centered && styles.sectionTitleCentered, headerTitleStyle]}>{title}</Text>
         <Pressable 
           onPress={toggleDarkMode}
           style={({ pressed }) => ({
             padding: 8,
             borderRadius: 20,
-            backgroundColor: pressed ? 'rgba(0,0,0,0.05)' : 'transparent',
+            backgroundColor: pressed ? 'rgba(255,255,255,0.05)' : 'transparent',
           })}
         >
           <MaterialCommunityIcons 
             name={isDarkMode ? 'weather-sunny' : 'weather-night'} 
             size={24} 
-            color={theme.primary} 
+            color={iconColor} 
           />
         </Pressable>
       </View>
-      {subtitle ? <Text style={[styles.sectionSubtitle, centered && styles.sectionSubtitleCentered, { color: theme.muted }]}>{subtitle}</Text> : null}
+      {subtitle ? <Text style={[styles.sectionSubtitle, centered && styles.sectionSubtitleCentered, headerSubtitleStyle]}>{subtitle}</Text> : null}
     </View>
   );
 }
@@ -668,11 +678,11 @@ function FullscreenImageModal({ visible, imageUri, onClose }) {
 const DATE_OPTIONS = createDateOptions();
 const TIME_OPTIONS = createTimeOptions();
 
-function SplashScreen({ navigation }) {
+function AppSplashScreen({ navigation }) {
   React.useEffect(() => {
     const t = setTimeout(() => {
       navigation.replace('Login');
-    }, 1400);
+    }, 2000);
     return () => clearTimeout(t);
   }, [navigation]);
 
@@ -928,18 +938,30 @@ function LoginScreen({ navigation, route }) {
   };
 
   return (
-    <ScreenShell>
+    <ScreenShell isLoginScreen={true}>
       <View style={styles.containerFlex}>
-        <View style={[styles.authCard, styles.glassCard, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.7)', borderColor: isDarkMode ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)' }]}>
+        {/* Standardized Emerald Glass Cards with 85% Opacity */}
+        <View style={{ marginBottom: 20, alignItems: 'center', backgroundColor: 'rgba(5, 31, 26, 0.85)', padding: 20, borderRadius: 24, borderBottomWidth: 2, borderBottomColor: '#20C997', width: '100%' }}>
+          <Text style={{ fontSize: 38, color: '#FFFFFF', fontFamily: 'Outfit-Black', textShadowColor: 'rgba(0,0,0,0.5)', textShadowRadius: 15 }}>
+            Welcome to GreenByte
+          </Text>
+          <Text style={{ color: '#20C997', fontSize: 16, fontFamily: 'Outfit-Bold', letterSpacing: 3, marginTop: 8, textTransform: 'uppercase' }}>
+            Powered by Pruthvi Zero Waste Foundation
+          </Text>
+        </View>
+
+        <View style={[styles.authCard, styles.glassCard, { backgroundColor: 'rgba(5, 31, 26, 0.85)', borderColor: 'rgba(255,255,255,0.1)', borderBottomWidth: 2, borderBottomColor: '#20C997' }]}>
 
           <ScreenHeader
             title="Login"
+            titleStyle={{ color: '#FFFFFF' }}
             subtitle="Enter your phone number and password"
+            subtitleStyle={{ color: 'rgba(255,255,255,0.7)' }}
             centered
             compact
           />
 
-          <Text style={[styles.label, { color: theme.text }]}>Role</Text>
+          <Text style={[styles.label, { color: '#FFFFFF', opacity: 0.9 }]}>Role</Text>
           <View style={styles.roleSelectorRow}>
             {ROLE_OPTIONS.map((option) => (
               <Pressable
@@ -947,14 +969,13 @@ function LoginScreen({ navigation, route }) {
                 style={[
                   styles.roleChip, 
                   role === option.value && styles.roleChipActive,
-                  isDarkMode && role !== option.value && { backgroundColor: 'rgba(255,255,255,0.05)', borderColor: 'rgba(255,255,255,0.1)' }
+                  { backgroundColor: role === option.value ? '#20C997' : 'rgba(255,255,255,0.1)', borderColor: 'rgba(255,255,255,0.2)' }
                 ]}
                 onPress={() => setRole(option.value)}
               >
                 <Text style={[
                   styles.roleChipText, 
-                  role === option.value && styles.roleChipTextActive,
-                  isDarkMode && role !== option.value && { color: theme.muted }
+                  { color: role === option.value ? '#FFFFFF' : 'rgba(255,255,255,0.7)' }
                 ]}>
                   {option.label}
                 </Text>
@@ -962,35 +983,35 @@ function LoginScreen({ navigation, route }) {
             ))}
           </View>
 
-          <Text style={[styles.label, { color: theme.text }]}>Phone Number</Text>
+          <Text style={[styles.label, { color: '#FFFFFF', opacity: 0.9, marginTop: 15 }]}>Phone Number</Text>
           <TextInput
             value={phone}
             onChangeText={setPhone}
             keyboardType="phone-pad"
-            style={[styles.input, isDarkMode && { backgroundColor: 'rgba(0, 0, 0, 0.3)', color: '#F4FBF8', borderColor: 'rgba(255,255,255,0.2)' }]}
+            style={[styles.input, { backgroundColor: 'rgba(255, 255, 255, 0.95)', color: '#051F1A', borderColor: 'rgba(255,255,255,0.2)' }]}
             placeholder="Registered mobile number"
-            placeholderTextColor={isDarkMode ? 'rgba(255,255,255,0.4)' : '#91A79F'}
+            placeholderTextColor="#666"
             maxLength={15}
           />
 
-          <Text style={[styles.label, { color: theme.text }]}>Password</Text>
+          <Text style={[styles.label, { color: '#FFFFFF', opacity: 0.9, marginTop: 15 }]}>Password</Text>
           <TextInput
             value={password}
             onChangeText={setPassword}
-            style={[styles.input, isDarkMode && { backgroundColor: 'rgba(0, 0, 0, 0.3)', color: '#F4FBF8', borderColor: 'rgba(255,255,255,0.2)' }]}
+            style={[styles.input, { backgroundColor: 'rgba(255, 255, 255, 0.95)', color: '#051F1A', borderColor: 'rgba(255,255,255,0.2)' }]}
             placeholder="Your password"
-            placeholderTextColor={isDarkMode ? 'rgba(255,255,255,0.4)' : '#91A79F'}
+            placeholderTextColor="#666"
             secureTextEntry
           />
 
           {errorMessage ? (
-            <View style={{ backgroundColor: isDarkMode ? 'rgba(255, 100, 100, 0.1)' : '#FFE8E5', padding: 12, borderRadius: 10, marginVertical: 14 }}>
-              <Text style={{ color: isDarkMode ? '#FF8080' : '#A13A2A', fontSize: 13, fontWeight: '600' }}>{errorMessage}</Text>
+            <View style={{ backgroundColor: 'rgba(255, 100, 100, 0.15)', padding: 12, borderRadius: 10, marginVertical: 14 }}>
+              <Text style={{ color: '#FF8080', fontSize: 13, fontWeight: '600' }}>{errorMessage}</Text>
             </View>
           ) : null}
 
-          <Pressable
-            style={[styles.primaryButton, submitting && styles.buttonDisabled]}
+          <Pressable 
+            style={[styles.primaryButton, { marginTop: 25, opacity: submitting ? 0.7 : 1 }]} 
             onPress={onContinue}
             disabled={submitting}
           >
@@ -999,8 +1020,13 @@ function LoginScreen({ navigation, route }) {
             </Text>
           </Pressable>
 
-          <Pressable style={styles.textButton} onPress={() => navigation.replace('Register')}>
-            <Text style={[styles.textButtonText, { color: theme.primary }]}>Need an account? Register first</Text>
+          <Pressable 
+            style={{ marginTop: 20, marginBottom: 10, alignItems: 'center' }}
+            onPress={() => navigation.navigate('Register')}
+          >
+            <Text style={{ color: '#20C997', fontWeight: '800', fontSize: 15 }}>
+              Need an account? Register first
+            </Text>
           </Pressable>
         </View>
       </View>
@@ -3110,6 +3136,20 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(false);
   const toastTimer = React.useRef(null);
 
+  const [fontsLoaded] = useFonts({
+    'Outfit-Regular': Outfit_400Regular,
+    'Outfit-SemiBold': Outfit_600SemiBold,
+    'Outfit-Bold': Outfit_700Bold,
+    'Outfit-Black': Outfit_900Black,
+  });
+
+  useEffect(() => {
+    if (fontsLoaded) {
+      ExpoSplashScreen.hideAsync();
+    }
+  }, [fontsLoaded]);
+
+
   const toggleDarkMode = React.useCallback(() => {
     setIsDarkMode((prev) => !prev);
   }, []);
@@ -3141,12 +3181,16 @@ export default function App() {
     [user, selectedItems, pickupDetails, pickupHistory, isDarkMode, toggleDarkMode]
   );
 
+  if (!fontsLoaded) {
+    return null;
+  }
+
   return (
     <ToastContext.Provider value={showToast}>
       <AppContext.Provider value={contextValue}>
         <NavigationContainer>
           <Stack.Navigator screenOptions={{ headerTransparent: true }}>
-            <Stack.Screen name="Splash" component={SplashScreen} options={{ headerShown: false }} />
+            <Stack.Screen name="Splash" component={AppSplashScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Onboarding" component={OnboardingScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
             <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
@@ -3253,7 +3297,7 @@ const styles = StyleSheet.create({
   splashTitle: {
     color: '#FFFFFF',
     fontSize: 38,
-    fontWeight: '800',
+    fontFamily: 'Outfit-Black',
     letterSpacing: 1
   },
   splashSubtitle: {
@@ -3271,7 +3315,7 @@ const styles = StyleSheet.create({
     marginTop: 18,
     fontSize: 30,
     color: THEME.text,
-    fontWeight: '700',
+    fontFamily: 'Outfit-Bold',
     textAlign: 'center'
   },
   heroText: {
@@ -3303,7 +3347,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 28,
     color: THEME.text,
-    fontWeight: '800',
+    fontFamily: 'Outfit-Black',
     marginBottom: 2,
     lineHeight: 34
   },
