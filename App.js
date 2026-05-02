@@ -102,7 +102,7 @@ const ROLE_OPTIONS = [
 ];
 
 // Replace localhost with your machine LAN IP when testing on a physical device.
-const API_BASE_URL = 'http://localhost:4000/api/v1';
+const API_BASE_URL = `https://greenbyte-app-2.onrender.com/api/v1`;
 const DEFAULT_COUNTRY_CODE = '91';
 function useTheme() {
   const { isDarkMode } = useContext(AppContext);
